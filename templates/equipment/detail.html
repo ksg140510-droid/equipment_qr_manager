@@ -1,0 +1,159 @@
+{% extends 'base.html' %}
+{% block title %}{{ eq.eq_name }} - 설비 상세{% endblock %}
+
+{% block content %}
+<div class="row mt-3 g-3">
+
+  <!-- 페이지 헤더 -->
+  <div class="col-12">
+    <div class="app-breadcrumb">
+      <a href="{{ url_for('index') }}">Home</a><span class="sep">/</span>
+      <a href="{{ url_for('equipment_list') }}">설비 관리</a><span class="sep">/</span>
+      <span class="current">설비 상세</span>
+    </div>
+    <div class="page-header">
+      <div>
+        <h1 class="page-title"><i class="bi bi-cpu" style="color:var(--mes-blue)"></i>{{ eq.eq_name }}</h1>
+        <div class="page-subtitle">{{ eq.eq_number }} · {{ eq.section }}</div>
+      </div>
+      <a href="{{ url_for('equipment_list') }}" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left"></i> 목록
+      </a>
+    </div>
+  </div>
+
+  <!-- 설비 정보 카드 (QR 스캔 랜딩) -->
+  <div class="col-12 col-md-5">
+    <div class="card">
+      <div class="card-header ch-navy">
+        <i class="bi bi-cpu"></i>
+        <span>{{ eq.eq_name }}</span>
+        <span class="ms-auto badge bg-section">{{ eq.section }}</span>
+      </div>
+      <div class="card-body p-0">
+        <table class="info-table">
+          <tr>
+            <td>설비번호</td>
+            <td class="fw-bold fs-5" style="color:var(--mes-blue)">{{ eq.eq_number }}</td>
+          </tr>
+          <tr>
+            <td>설치위치</td>
+            <td>{{ eq.location or '-' }}</td>
+          </tr>
+          <tr>
+            <td>총 고장</td>
+            <td>
+              <span class="badge bg-grade-a fs-6">{{ fault_count }}건</span>
+            </td>
+          </tr>
+          {% if eq.note %}
+          <tr>
+            <td>비고</td>
+            <td class="text-muted">{{ eq.note }}</td>
+          </tr>
+          {% endif %}
+        </table>
+      </div>
+      <div class="card-footer" style="background:#fff !important;padding:1rem 1.1rem !important;">
+        <div class="d-grid gap-2">
+          <!-- 메인 액션: 고장 등록 (초대형) -->
+          <a href="{{ url_for('fault_register', eq_id=eq.id) }}"
+             class="btn btn-danger btn-xl">
+            <i class="bi bi-exclamation-triangle-fill"></i> 고장 등록
+          </a>
+          <div class="row g-2">
+            <div class="col-6">
+              <a href="{{ url_for('qr_print', eq_id=eq.id) }}"
+                 class="btn btn-outline-dark w-100">
+                <i class="bi bi-qr-code-scan"></i> QR 출력
+              </a>
+            </div>
+            <div class="col-6">
+              <a href="{{ url_for('fault_list') }}?eq_id={{ eq.id }}"
+                 class="btn btn-outline-primary w-100">
+                <i class="bi bi-clock-history"></i> 전체 이력
+              </a>
+            </div>
+          </div>
+          <div class="row g-2">
+            <div class="col-6">
+              <a href="{{ url_for('equipment_edit', eq_id=eq.id) }}"
+                 class="btn btn-outline-warning w-100">
+                <i class="bi bi-pencil"></i> 수정
+              </a>
+            </div>
+            <div class="col-6">
+              {% if session.get('edit_authorized') %}
+              <form method="post" action="{{ url_for('equipment_delete', eq_id=eq.id) }}"
+                    onsubmit="return confirm('{{ eq.eq_name }} 설비를 삭제하시겠습니까?')">
+                <button class="btn btn-outline-danger w-100">
+                  <i class="bi bi-trash"></i> 삭제
+                </button>
+              </form>
+              {% else %}
+              <button type="button" class="btn btn-outline-danger w-100"
+                      onclick="openDeleteAuth('{{ request.full_path }}')">
+                <i class="bi bi-trash"></i> 삭제
+              </button>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 최근 고장 이력 -->
+  <div class="col-12 col-md-7">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-clock-history" style="color:var(--mes-danger)"></i>
+        최근 고장 이력 <span class="text-muted fw-normal">(최근 5건)</span>
+      </div>
+      <div class="card-body p-0">
+        {% if recent_faults %}
+        {% for f in recent_faults %}
+        {% set fstatus = f.status or '미조치' %}
+        <div class="fault-item status-card-{{ fstatus }}" style="border-left-width:3px">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <div class="d-flex gap-1">
+              <span class="badge {% if f.grade == 'A' %}bg-grade-a{% elif f.grade == 'B' %}bg-grade-b{% elif f.grade == 'C' %}bg-grade-c{% else %}bg-grade-d{% endif %}">
+                {{ f.grade }}등급
+              </span>
+              <span class="badge badge-status badge-status-{{ fstatus }}" style="font-size:0.68rem">{{ fstatus }}</span>
+            </div>
+            <small class="text-muted">{{ f.occurred_at[:16] }}</small>
+          </div>
+          <div class="fw-bold mb-1 d-flex flex-wrap gap-1">
+            {% for s in (f.symptom or '-').split(', ') %}
+              {% if s and s != '-' %}
+              <span class="badge" style="background:#fff3e0;color:var(--mes-warning);border:1px solid #ffe0b2;font-size:0.75rem;white-space:normal;">
+                <i class="bi bi-exclamation-circle me-1"></i>{{ s }}
+              </span>
+              {% else %}-{% endif %}
+            {% endfor %}
+          </div>
+          <div class="text-muted small mb-1">원인: {{ f.cause or '-' }}</div>
+          <div class="text-muted small mb-2">조치: {{ f.action_detail or '-' }}</div>
+          <div class="d-flex justify-content-between align-items-center">
+            <small class="text-muted">
+              <i class="bi bi-person me-1"></i>{{ f.worker or '-' }}
+            </small>
+            <a href="{{ url_for('fault_detail', fault_id=f.id) }}"
+               class="btn btn-outline-primary btn-xs">
+              <i class="bi bi-search"></i> 상세
+            </a>
+          </div>
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="text-center text-muted py-5">
+          <i class="bi bi-check-circle fs-1 d-block mb-2" style="color:var(--mes-success)"></i>
+          고장 이력이 없습니다.
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

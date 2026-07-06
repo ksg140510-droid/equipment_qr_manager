@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+
+# 런타임 데이터 / 비밀정보 (소스관리 제외)
+equipment_qr.db
+secret_key.txt
+admin_config.json
+backup_log.json
+
+# 업로드/생성 파일 (재생성 가능 또는 개별 백업으로 관리)
+uploads/
+qr_codes/
+equipment_qr_manager_backup/

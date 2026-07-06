@@ -1,0 +1,161 @@
+{% extends 'base.html' %}
+{% block title %}추이 분석{% endblock %}
+
+{% block content %}
+<div class="row mt-3 g-3">
+
+  <!-- 페이지 헤더 -->
+  <div class="col-12">
+    <div class="app-breadcrumb">
+      <a href="{{ url_for('index') }}">Home</a><span class="sep">/</span>
+      <span class="current">추이 분석</span>
+    </div>
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">
+          <i class="bi bi-graph-up-arrow" style="color:var(--mes-success)"></i>고장 추이 분석
+        </h1>
+        <div class="page-subtitle">기간별 발생 추이 모니터링</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 필터 -->
+  <div class="col-12">
+    <div class="search-panel">
+      <form method="get" class="row g-2 align-items-end">
+        <div class="col-6 col-md-3">
+          <label class="form-label">기간 단위</label>
+          <select name="period" class="form-select form-select-sm">
+            <option value="monthly" {% if period == 'monthly' %}selected{% endif %}>월별</option>
+            <option value="weekly"  {% if period == 'weekly'  %}selected{% endif %}>주별</option>
+          </select>
+        </div>
+        <div class="col-6 col-md-3">
+          <label class="form-label">섹션 필터</label>
+          <select name="section" class="form-select form-select-sm">
+            <option value="">전체 섹션</option>
+            {% for s in sections %}
+            <option value="{{ s }}" {% if section == s %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-6 col-md-2">
+          <button class="btn btn-primary btn-sm w-100">
+            <i class="bi bi-search"></i> 조회
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 추이 차트 -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-bar-chart-line" style="color:var(--mes-success)"></i>
+        {{ '월별' if period == 'monthly' else '주별' }} 고장 발생 추이
+      </div>
+      <div class="card-body">
+        <canvas id="trendChart" height="150"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- 설비별 차트 + 데이터 테이블 -->
+  <div class="col-12 col-md-6">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-cpu" style="color:var(--mes-blue)"></i>설비별 고장 건수 TOP10
+      </div>
+      <div class="card-body">
+        <canvas id="eqChart" height="250"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-md-6">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-table" style="color:var(--mes-muted)"></i>기간별 데이터
+      </div>
+      <div class="table-responsive" style="max-height:350px;overflow-y:auto">
+        <table class="table table-hover mb-0">
+          <thead class="sticky-top" style="top:0;z-index:1">
+            <tr>
+              <th>기간</th>
+              <th class="text-center">건수</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in trend|reverse %}
+            <tr>
+              <td>{{ row.label }}</td>
+              <td class="text-center fw-bold">{{ row.cnt }}</td>
+            </tr>
+            {% endfor %}
+            {% if not trend %}
+            <tr><td colspan="2" class="text-center text-muted py-4">데이터 없음</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const trendCtx = document.getElementById('trendChart');
+if (trendCtx) {
+  new Chart(trendCtx, {
+    type: 'bar',
+    data: {
+      labels: {{ trend | map(attribute='label') | list | tojson }},
+      datasets: [
+        { label: 'A 생산정지', data: {{ trend_by_grade['A'] | tojson }}, backgroundColor: '#C62828', stack: 's' },
+        { label: 'B 품질영향', data: {{ trend_by_grade['B'] | tojson }}, backgroundColor: '#F9A825', stack: 's' },
+        { label: 'C 경미고장', data: {{ trend_by_grade['C'] | tojson }}, backgroundColor: '#2E7D32', stack: 's' },
+        { label: 'D 기타',     data: {{ trend_by_grade['D'] | tojson }}, backgroundColor: '#90A4AE', stack: 's' }
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: 'top', labels: { boxWidth: 12, font: { size: 11 } } } },
+      scales: {
+        y: { beginAtZero: true, stacked: true, ticks: { stepSize:1, color:'#607D8B' }, grid: { color:'#f0f3f7' } },
+        x: { stacked: true, ticks: { color:'#607D8B' }, grid: { display: false } }
+      }
+    }
+  });
+}
+const eqCtx = document.getElementById('eqChart');
+if (eqCtx) {
+  new Chart(eqCtx, {
+    type: 'bar',
+    data: {
+      labels: {{ eq_trend | map(attribute='label') | list | tojson }},
+      datasets: [{
+        data: {{ eq_trend | map(attribute='cnt') | list | tojson }},
+        backgroundColor: [
+          '#1565C0','#0097A7','#2E7D32','#C62828','#6A1B9A',
+          '#00838F','#558B2F','#EF6C00','#4527A0','#37474F'
+        ],
+        borderRadius: 4
+      }]
+    },
+    options: {
+      responsive: true,
+      indexAxis: 'y',
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { beginAtZero: true, ticks: { stepSize:1, color:'#607D8B' }, grid: { color:'#f0f3f7' } },
+        y: { ticks: { color:'#607D8B' }, grid: { display: false } }
+      }
+    }
+  });
+}
+</script>
+{% endblock %}

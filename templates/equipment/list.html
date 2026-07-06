@@ -1,0 +1,131 @@
+{% extends 'base.html' %}
+{% block title %}설비 목록{% endblock %}
+
+{% block content %}
+<div class="row mt-3 g-3">
+
+  <!-- 페이지 헤더 -->
+  <div class="col-12">
+    <div class="app-breadcrumb">
+      <a href="{{ url_for('index') }}">Home</a><span class="sep">/</span><span class="current">설비 관리</span>
+    </div>
+    <div class="page-header">
+      <div>
+        <h1 class="page-title"><i class="bi bi-cpu" style="color:var(--mes-blue)"></i>설비 목록</h1>
+        <div class="page-subtitle">총 {{ equipments|length }}개 설비 등록됨</div>
+      </div>
+      <a href="{{ url_for('equipment_add') }}" class="btn btn-primary">
+        <i class="bi bi-plus-circle"></i> 설비 등록
+      </a>
+    </div>
+  </div>
+
+  <!-- 검색 패널 -->
+  <div class="col-12">
+    <div class="search-panel">
+      <form method="get" class="row g-2 align-items-end">
+        <div class="col-12 col-md-5">
+          <label class="form-label">설비 검색</label>
+          <input type="text" name="q" value="{{ q }}"
+                 class="form-control form-control-sm"
+                 placeholder="설비번호 / 설비명 / 위치">
+        </div>
+        <div class="col-6 col-md-3">
+          <label class="form-label">섹션</label>
+          <select name="section" class="form-select form-select-sm">
+            <option value="">전체 섹션</option>
+            {% for s in sections %}
+            <option value="{{ s }}" {% if sec == s %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-3 col-md-2">
+          <button class="btn btn-primary btn-sm w-100">
+            <i class="bi bi-search"></i> 검색
+          </button>
+        </div>
+        <div class="col-3 col-md-2">
+          <a href="{{ url_for('qr_all') }}" class="btn btn-outline-secondary btn-sm w-100">
+            <i class="bi bi-qr-code"></i> QR 출력
+          </a>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 설비 목록 테이블 -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-hover mb-0">
+            <thead>
+              <tr>
+                <th>설비번호</th>
+                <th>설비명</th>
+                <th class="d-none d-md-table-cell">섹션</th>
+                <th class="d-none d-md-table-cell">위치</th>
+                <th class="text-center">QR</th>
+                <th class="text-center">관리</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for eq in equipments %}
+              <tr>
+                <td>
+                  <a href="{{ url_for('equipment_detail', eq_id=eq.id) }}"
+                     class="fw-bold text-decoration-none" style="color:var(--mes-blue)">
+                    {{ eq.eq_number }}
+                  </a>
+                </td>
+                <td class="fw-bold">{{ eq.eq_name }}</td>
+                <td class="d-none d-md-table-cell">
+                  <span class="badge bg-section">{{ eq.section }}</span>
+                </td>
+                <td class="d-none d-md-table-cell text-muted">{{ eq.location or '-' }}</td>
+                <td class="text-center">
+                  <a href="{{ url_for('qr_print', eq_id=eq.id) }}"
+                     class="btn btn-outline-dark btn-xs" title="QR 출력">
+                    <i class="bi bi-qr-code-scan"></i>
+                  </a>
+                </td>
+                <td class="text-center">
+                  <a href="{{ url_for('equipment_edit', eq_id=eq.id) }}"
+                     class="btn btn-outline-warning btn-xs me-1">
+                    <i class="bi bi-pencil"></i>
+                  </a>
+                  {% if session.get('edit_authorized') %}
+                  <form method="post" action="{{ url_for('equipment_delete', eq_id=eq.id) }}"
+                        class="d-inline"
+                        onsubmit="return confirm('{{ eq.eq_name }} 설비를 삭제하시겠습니까?')">
+                    <button class="btn btn-outline-danger btn-xs">
+                      <i class="bi bi-trash"></i>
+                    </button>
+                  </form>
+                  {% else %}
+                  <button type="button" class="btn btn-outline-danger btn-xs"
+                          onclick="openDeleteAuth('{{ request.full_path }}')">
+                    <i class="bi bi-trash"></i>
+                  </button>
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+              {% if not equipments %}
+              <tr>
+                <td colspan="6" class="text-center text-muted py-5">
+                  <i class="bi bi-inbox fs-2 d-block mb-2"></i>등록된 설비가 없습니다.
+                </td>
+              </tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card-footer">
+        <i class="bi bi-info-circle me-1"></i>총 <strong>{{ equipments|length }}</strong>개 설비
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

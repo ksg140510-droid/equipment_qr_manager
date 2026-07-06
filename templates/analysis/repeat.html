@@ -1,0 +1,170 @@
+{% extends 'base.html' %}
+{% block title %}반복고장 분석{% endblock %}
+
+{% block content %}
+<div class="row mt-3 g-3">
+
+  <!-- 페이지 헤더 -->
+  <div class="col-12">
+    <div class="app-breadcrumb">
+      <a href="{{ url_for('index') }}">Home</a><span class="sep">/</span>
+      <span class="current">반복고장 분석</span>
+    </div>
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">
+          <i class="bi bi-arrow-repeat" style="color:var(--mes-danger)"></i>반복고장 분석
+        </h1>
+        <div class="page-subtitle">설비 · 증상 · 부품별 고장 현황</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 설비별 고장 발생 현황 -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-cpu" style="color:var(--mes-blue)"></i>설비별 고장 발생 현황
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>순위</th>
+              <th>설비번호</th>
+              <th>설비명</th>
+              <th>섹션</th>
+              <th class="text-center">합계</th>
+              <th class="text-center" style="color:var(--mes-danger)">A 생산정지</th>
+              <th class="text-center" style="color:var(--mes-warning)">B 품질영향</th>
+              <th class="text-center" style="color:var(--mes-success)">C 경미</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in eq_stat %}
+            <tr {% if row.grade_a > 0 %}class="row-grade-a"{% endif %}>
+              <td>
+                <span class="badge {% if loop.index <= 3 %}bg-danger{% else %}bg-secondary{% endif %}">
+                  {{ loop.index }}
+                </span>
+              </td>
+              <td class="fw-bold" style="color:var(--mes-blue)">{{ row.eq_number }}</td>
+              <td>{{ row.eq_name }}</td>
+              <td><span class="badge bg-section">{{ row.section }}</span></td>
+              <td class="text-center fw-bold">{{ row.total }}</td>
+              <td class="text-center fw-bold" style="color:var(--mes-danger)">{{ row.grade_a or 0 }}</td>
+              <td class="text-center fw-bold" style="color:var(--mes-warning)">{{ row.grade_b or 0 }}</td>
+              <td class="text-center fw-bold" style="color:var(--mes-success)">{{ row.grade_c or 0 }}</td>
+            </tr>
+            {% endfor %}
+            {% if not eq_stat %}
+            <tr><td colspan="8" class="text-center text-muted py-4">데이터 없음</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- 증상별 + 부품별 -->
+  <div class="col-12 col-md-6">
+    <div class="card h-100">
+      <div class="card-header">
+        <i class="bi bi-list-check" style="color:var(--mes-danger)"></i>증상별 발생 현황
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>순위</th><th>증상</th><th class="text-center">건수</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in sym_stat %}
+            <tr>
+              <td>
+                <span class="badge {% if loop.index <= 3 %}bg-danger{% else %}bg-secondary{% endif %}">
+                  {{ loop.index }}
+                </span>
+              </td>
+              <td>{{ row.symptom or '미입력' }}</td>
+              <td class="text-center fw-bold">{{ row.total }}</td>
+            </tr>
+            {% endfor %}
+            {% if not sym_stat %}
+            <tr><td colspan="3" class="text-center text-muted py-4">데이터 없음</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-md-6">
+    <div class="card h-100">
+      <div class="card-header">
+        <i class="bi bi-tools" style="color:var(--mes-muted)"></i>사용부품 교체 현황
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>순위</th><th>부품명</th>
+              <th class="text-center">교체건수</th>
+              <th class="text-center">총수량</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in parts_stat %}
+            <tr>
+              <td>
+                <span class="badge {% if loop.index <= 3 %}bg-danger{% else %}bg-secondary{% endif %}">
+                  {{ loop.index }}
+                </span>
+              </td>
+              <td>{{ row.part_name }}</td>
+              <td class="text-center">{{ row.cases }}</td>
+              <td class="text-center fw-bold">{{ row.total }}</td>
+            </tr>
+            {% endfor %}
+            {% if not parts_stat %}
+            <tr><td colspan="4" class="text-center text-muted py-4">데이터 없음</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- 고장등급 분포 -->
+  <div class="col-12 col-md-6">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-shield-exclamation" style="color:var(--mes-danger)"></i>고장등급 분포
+      </div>
+      <div class="card-body">
+        {% set grade_total = grade_stat | sum(attribute='total') %}
+        {% for g in grade_stat %}
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <span class="badge {% if g.grade == 'A' %}bg-grade-a{% elif g.grade == 'B' %}bg-grade-b{% elif g.grade == 'C' %}bg-grade-c{% else %}bg-grade-d{% endif %} px-2 py-1">
+            {{ g.grade or 'D' }}등급
+          </span>
+          <span class="fw-bold text-muted small">{{ g.total }}건</span>
+          <div class="progress flex-grow-1 mx-2" style="height:8px">
+            <div class="progress-bar {% if g.grade == 'A' %}bg-danger{% elif g.grade == 'B' %}bg-warning{% elif g.grade == 'C' %}bg-success{% else %}bg-secondary{% endif %}"
+                 style="width:{{ (g.total / grade_total * 100)|round|int if grade_total > 0 else 0 }}%"></div>
+          </div>
+        </div>
+        {% endfor %}
+        {% if not grade_stat %}
+        <p class="text-muted text-center small py-2">데이터 없음</p>
+        {% endif %}
+        <p class="text-muted small mt-3 mb-0">
+          <i class="bi bi-info-circle me-1"></i>기간별 발생 추이는 <a href="{{ url_for('analysis_trend') }}">추이 분석</a> 페이지에서 확인하세요.
+        </p>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

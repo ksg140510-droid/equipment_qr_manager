@@ -1,0 +1,287 @@
+{% extends 'base.html' %}
+{% block title %}고장 상세 - {{ fault.eq_name }}{% endblock %}
+
+{% block content %}
+<div class="row mt-3 justify-content-center">
+  <div class="col-12 col-md-9 col-lg-7">
+
+    <!-- 페이지 헤더 -->
+    <div class="app-breadcrumb">
+      <a href="{{ url_for('index') }}">Home</a><span class="sep">/</span>
+      <a href="{{ url_for('fault_list') }}">고장 이력</a><span class="sep">/</span>
+      <span class="current">상세</span>
+    </div>
+    <div class="page-header">
+      <h1 class="page-title">
+        <i class="bi bi-exclamation-triangle-fill" style="color:var(--mes-danger)"></i>고장 상세 정보
+      </h1>
+      <div class="d-flex gap-2 align-items-center">
+        {% set fstatus = fault.status or '미조치' %}
+        <span class="badge badge-status badge-status-{{ fstatus }}" style="font-size:0.82rem;padding:.4em 1em">
+          {% if fstatus == '완료' %}<i class="bi bi-check-circle-fill me-1"></i>
+          {% elif fstatus == '진행중' %}<i class="bi bi-hourglass-split me-1"></i>
+          {% elif fstatus == '대기' %}<i class="bi bi-pause-circle-fill me-1"></i>
+          {% else %}<i class="bi bi-exclamation-circle-fill me-1"></i>{% endif %}
+          {{ fstatus }}
+        </span>
+        <span class="badge {% if fault.grade == 'A' %}bg-grade-a{% elif fault.grade == 'B' %}bg-grade-b{% elif fault.grade == 'C' %}bg-grade-c{% else %}bg-grade-d{% endif %}"
+              style="font-size:0.82rem;padding:.4em 1em">
+          {{ fault.grade }}등급
+        </span>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-header {% if fault.grade == 'A' %}ch-danger{% elif fault.grade == 'B' %}ch-warning{% elif fault.grade == 'C' %}ch-success{% else %}ch-navy{% endif %}">
+        <i class="bi bi-exclamation-triangle-fill"></i>
+        고장 이력
+        <span class="ms-auto" style="font-size:0.8rem;opacity:.85">{{ fault.occurred_at[:16] }}</span>
+      </div>
+
+      <!-- 기본 정보 -->
+      <div class="card-body p-0">
+        <table class="info-table">
+          <tr>
+            <td>설비번호</td>
+            <td class="fw-bold" style="color:var(--mes-blue)">{{ fault.eq_number }}</td>
+          </tr>
+          <tr>
+            <td>설비명</td>
+            <td class="fw-bold">{{ fault.eq_name }}</td>
+          </tr>
+          <tr>
+            <td>처리상태</td>
+            <td>
+              {% set fstatus = fault.status or '미조치' %}
+              <span class="badge badge-status badge-status-{{ fstatus }}" style="font-size:0.82rem">
+                {% if fstatus == '완료' %}<i class="bi bi-check-circle-fill me-1"></i>
+                {% elif fstatus == '진행중' %}<i class="bi bi-hourglass-split me-1"></i>
+                {% elif fstatus == '대기' %}<i class="bi bi-pause-circle-fill me-1"></i>
+                {% else %}<i class="bi bi-exclamation-circle-fill me-1"></i>{% endif %}
+                {{ fstatus }}
+              </span>
+            </td>
+          </tr>
+          {% if fstatus == '대기' and fault.status_note %}
+          <tr>
+            <td>대기 사유</td>
+            <td>{{ fault.status_note }}</td>
+          </tr>
+          {% endif %}
+          <tr>
+            <td>발생일시</td>
+            <td>{{ fault.occurred_at[:16] }}</td>
+          </tr>
+          {% if fault.grade == 'D' and fault.grade_note %}
+          <tr>
+            <td>기타 내용</td>
+            <td>{{ fault.grade_note }}</td>
+          </tr>
+          {% endif %}
+          <tr>
+            <td>완료일</td>
+            <td>{{ fault.completed_at or '-' }}</td>
+          </tr>
+          <tr>
+            <td>증상</td>
+            <td>
+              <div class="d-flex flex-wrap gap-1">
+                {% for s in (fault.symptom or '-').split(', ') %}
+                  {% if s and s != '-' %}
+                  <span class="badge" style="background:#fff3e0;color:var(--mes-warning);border:1px solid #ffe0b2;font-size:0.82rem;white-space:normal;">{{ s }}</span>
+                  {% else %}
+                  <span class="text-muted">-</span>
+                  {% endif %}
+                {% endfor %}
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td>원인</td>
+            <td>{{ fault.cause or '-' }}</td>
+          </tr>
+          <tr>
+            <td>조치내용</td>
+            <td style="white-space:pre-wrap">{{ fault.action_detail or '-' }}</td>
+          </tr>
+          <tr>
+            <td>작업자</td>
+            <td class="fw-bold">{{ fault.worker or '-' }}</td>
+          </tr>
+        </table>
+      </div>
+
+      <!-- 사용부품 -->
+      {% if parts %}
+      <div class="card-body border-top" style="border-color:var(--mes-border) !important">
+        <div class="fw-bold mb-2 small text-muted text-uppercase" style="letter-spacing:.5px">
+          <i class="bi bi-tools me-1"></i>사용부품
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm table-bordered mb-0">
+            <thead>
+              <tr><th>부품명</th><th class="text-center">수량</th><th>비고</th></tr>
+            </thead>
+            <tbody>
+              {% for p in parts %}
+              <tr>
+                <td class="fw-bold">{{ p.part_name }}</td>
+                <td class="text-center">{{ p.quantity }}</td>
+                <td class="text-muted">{{ p.note or '-' }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- 고장 사진 -->
+      {% if fault_photos or fault.photo_fault %}
+      <div class="card-body border-top" style="border-color:var(--mes-border) !important">
+        <div class="fw-bold mb-2 small text-muted text-uppercase" style="letter-spacing:.5px">
+          <i class="bi bi-camera me-1" style="color:var(--mes-danger)"></i>고장 사진
+        </div>
+        <div class="row g-2">
+          {% for p in fault_photos %}
+          <div class="col-6 col-md-4">
+            {% if p.label %}<div class="small mb-1 text-muted text-truncate">{{ p.label }}</div>{% endif %}
+            <a href="{{ url_for('uploaded_file', subfolder='photos', filename=p.filename) }}" target="_blank">
+              <img src="{{ url_for('uploaded_file', subfolder='photos', filename=p.filename) }}"
+                   class="img-fluid rounded"
+                   style="border:2px solid var(--mes-border);height:130px;width:100%;object-fit:cover"
+                   alt="{{ p.label or '고장사진' }}">
+            </a>
+          </div>
+          {% endfor %}
+          {% if fault.photo_fault %}
+          <div class="col-6 col-md-4">
+            <a href="{{ url_for('uploaded_file', subfolder='fault', filename=fault.photo_fault) }}" target="_blank">
+              <img src="{{ url_for('uploaded_file', subfolder='fault', filename=fault.photo_fault) }}"
+                   class="img-fluid rounded"
+                   style="border:2px solid var(--mes-border);height:130px;width:100%;object-fit:cover"
+                   alt="고장사진">
+            </a>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- 완료 사진 -->
+      {% if action_photos or fault.photo_action %}
+      <div class="card-body border-top" style="border-color:var(--mes-border) !important">
+        <div class="fw-bold mb-2 small text-muted text-uppercase" style="letter-spacing:.5px">
+          <i class="bi bi-camera-fill me-1" style="color:var(--mes-success)"></i>완료 사진
+        </div>
+        <div class="row g-2">
+          {% for p in action_photos %}
+          <div class="col-6 col-md-4">
+            {% if p.label %}<div class="small mb-1 text-muted text-truncate">{{ p.label }}</div>{% endif %}
+            <a href="{{ url_for('uploaded_file', subfolder='photos', filename=p.filename) }}" target="_blank">
+              <img src="{{ url_for('uploaded_file', subfolder='photos', filename=p.filename) }}"
+                   class="img-fluid rounded"
+                   style="border:2px solid var(--mes-border);height:130px;width:100%;object-fit:cover"
+                   alt="{{ p.label or '완료사진' }}">
+            </a>
+          </div>
+          {% endfor %}
+          {% if fault.photo_action %}
+          <div class="col-6 col-md-4">
+            <a href="{{ url_for('uploaded_file', subfolder='action', filename=fault.photo_action) }}" target="_blank">
+              <img src="{{ url_for('uploaded_file', subfolder='action', filename=fault.photo_action) }}"
+                   class="img-fluid rounded"
+                   style="border:2px solid var(--mes-border);height:130px;width:100%;object-fit:cover"
+                   alt="조치사진">
+            </a>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+
+      <div class="card-footer" style="background:#fff !important;padding:0.9rem 1.1rem !important;">
+        <div class="d-flex gap-2 flex-wrap">
+          <a href="{{ url_for('equipment_detail', eq_id=fault.equipment_id) }}"
+             class="btn btn-outline-primary btn-sm">
+            <i class="bi bi-cpu"></i> 설비 상세
+          </a>
+          <a href="{{ url_for('fault_list') }}"
+             class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-list"></i> 목록
+          </a>
+          <!-- 수정 버튼 → 비밀번호 모달 -->
+          <button type="button" class="btn btn-outline-warning btn-sm"
+                  data-bs-toggle="modal" data-bs-target="#editAuthModal">
+            <i class="bi bi-pencil-square"></i> 수정
+          </button>
+          {% if session.get('edit_authorized') %}
+          <form method="post" action="{{ url_for('fault_delete', fault_id=fault.id) }}"
+                class="ms-auto"
+                onsubmit="return confirm('이 고장 이력을 삭제하시겠습니까?')">
+            <button class="btn btn-outline-danger btn-sm">
+              <i class="bi bi-trash"></i> 삭제
+            </button>
+          </form>
+          {% else %}
+          <button type="button" class="btn btn-outline-danger btn-sm ms-auto"
+                  onclick="openDeleteAuth('{{ request.full_path }}')">
+            <i class="bi bi-trash"></i> 삭제
+          </button>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- 수정 비밀번호 모달 -->
+<div class="modal fade" id="editAuthModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered" style="max-width:360px">
+    <div class="modal-content" style="border-radius:14px;overflow:hidden;border:none">
+      <div class="modal-header" style="background:var(--mes-navy);color:#fff;border:none;padding:1rem 1.3rem">
+        <h6 class="modal-title mb-0">
+          <i class="bi bi-shield-lock-fill me-2" style="color:var(--mes-cyan)"></i>수정 권한 확인
+        </h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-4">
+        <p class="text-muted small mb-3">
+          고장 이력 수정은 관리자 비밀번호가 필요합니다.
+        </p>
+        <form method="post" action="{{ url_for('fault_auth') }}" id="authForm">
+          <input type="hidden" name="next" value="{{ url_for('fault_edit', fault_id=fault.id) }}">
+          <div class="mb-3">
+            <label class="form-label">비밀번호</label>
+            <div class="input-group">
+              <span class="input-group-text" style="background:#f4f7fb;border-color:var(--mes-border)">
+                <i class="bi bi-lock-fill text-muted"></i>
+              </span>
+              <input type="password" name="password" id="authPwInput"
+                     class="form-control" placeholder="비밀번호 입력"
+                     autofocus autocomplete="current-password">
+            </div>
+            <div id="pwError" class="text-danger small mt-1" style="display:none">
+              비밀번호가 올바르지 않습니다.
+            </div>
+          </div>
+          <div class="d-grid">
+            <button type="submit" class="btn btn-warning" style="min-height:52px;font-size:1rem;color:#fff">
+              <i class="bi bi-unlock-fill me-1"></i> 수정 화면으로 이동
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('editAuthModal').addEventListener('shown.bs.modal', function() {
+  document.getElementById('authPwInput').focus();
+});
+</script>
+{% endblock %}

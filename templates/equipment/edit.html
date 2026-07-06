@@ -1,0 +1,77 @@
+{% extends 'base.html' %}
+{% block title %}설비 수정{% endblock %}
+
+{% block content %}
+<div class="row mt-3 justify-content-center">
+  <div class="col-12 col-md-8 col-lg-6">
+
+    <!-- 페이지 헤더 -->
+    <div class="app-breadcrumb">
+      <a href="{{ url_for('index') }}">Home</a><span class="sep">/</span>
+      <a href="{{ url_for('equipment_list') }}">설비 관리</a><span class="sep">/</span>
+      <span class="current">설비 수정</span>
+    </div>
+    <div class="page-header">
+      <h1 class="page-title">
+        <i class="bi bi-pencil-square" style="color:var(--mes-warning)"></i>설비 수정
+      </h1>
+      <a href="{{ url_for('equipment_list') }}" class="btn btn-outline-secondary btn-sm">
+        <i class="bi bi-arrow-left"></i> 목록
+      </a>
+    </div>
+
+    <div class="card">
+      <div class="card-header ch-warning">
+        <i class="bi bi-pencil-square"></i> 설비 정보 수정
+        <span class="ms-auto badge" style="background:rgba(255,255,255,.25);font-weight:600">{{ eq.eq_number }}</span>
+      </div>
+      <div class="card-body">
+        <form method="post">
+
+          <div class="mb-3">
+            <label class="form-label">섹션 <span class="req">*</span></label>
+            <select name="section" class="form-select" required>
+              {% for s in sections %}
+              <option value="{{ s }}" {% if eq.section == s %}selected{% endif %}>{{ s }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">설비번호 <span class="req">*</span></label>
+            <input type="text" name="eq_number" class="form-control"
+                   value="{{ eq.eq_number }}" required>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">설비명 <span class="req">*</span></label>
+            <input type="text" name="eq_name" class="form-control"
+                   value="{{ eq.eq_name }}" required>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">설치위치</label>
+            <input type="text" name="location" class="form-control"
+                   value="{{ eq.location or '' }}">
+          </div>
+
+          <div class="mb-4">
+            <label class="form-label">비고</label>
+            <textarea name="note" class="form-control" rows="2">{{ eq.note or '' }}</textarea>
+          </div>
+
+          <div class="d-grid gap-2">
+            <button type="submit" class="btn btn-warning">
+              <i class="bi bi-save"></i> 수정 저장
+            </button>
+            <a href="{{ url_for('equipment_list') }}" class="btn btn-outline-secondary">
+              취소
+            </a>
+          </div>
+
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

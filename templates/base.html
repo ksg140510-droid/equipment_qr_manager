@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>{% block title %}설비 QR 이력관리{% endblock %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<!-- ══════ 모바일 전용 상단바 (lg 미만) ══════ -->
+<nav class="navbar navbar-dark navbar-expand-lg sticky-top d-lg-none">
+  <div class="container-fluid">
+    <a class="navbar-brand d-flex align-items-center gap-2" href="{{ url_for('index') }}">
+      <img src="{{ url_for('static', filename='img/logo.jpg') }}" alt="로고"
+           style="height:34px;width:auto;border-radius:4px;object-fit:contain;background:#fff;padding:2px;">
+      <span class="d-none d-sm-inline">
+        설비 QR 이력관리
+        <span class="brand-sub">SINOPEX MES</span>
+      </span>
+    </a>
+    <button class="btn btn-link ms-auto me-1" data-bs-toggle="modal" data-bs-target="#backupModal"
+            style="border:1.5px solid rgba(79,195,247,.5);border-radius:8px;padding:.35rem .7rem;line-height:1">
+      <i class="bi bi-cloud-arrow-up-fill" style="color:#4fc3f7;font-size:1.2rem"></i>
+      <span class="d-none d-sm-inline ms-1" style="color:#4fc3f7;font-size:0.85rem;font-weight:600">백업</span>
+    </button>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="navMenu">
+      <ul class="navbar-nav ms-auto gap-1">
+        <li class="nav-item">
+          <a class="nav-link {% if request.endpoint == 'index' %}active{% endif %}" href="{{ url_for('index') }}">
+            <i class="bi bi-speedometer2"></i> 대시보드
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link {% if 'equipment' in request.endpoint %}active{% endif %}" href="{{ url_for('equipment_list') }}">
+            <i class="bi bi-cpu"></i> 설비관리
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link {% if request.endpoint == 'fault_select' %}active{% endif %}" href="{{ url_for('fault_select') }}">
+            <i class="bi bi-plus-circle-fill"></i> 고장등록
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link {% if request.endpoint == 'fault_list' %}active{% endif %}" href="{{ url_for('fault_list') }}">
+            <i class="bi bi-exclamation-triangle"></i> 고장이력
+          </a>
+        </li>
+        <li class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle {% if 'analysis' in request.endpoint %}active{% endif %}" href="#" data-bs-toggle="dropdown">
+            <i class="bi bi-bar-chart-line"></i> 분석
+          </a>
+          <ul class="dropdown-menu dropdown-menu-end">
+            <li><a class="dropdown-item" href="{{ url_for('analysis_repeat') }}"><i class="bi bi-arrow-repeat me-2 text-danger"></i>반복고장 분석</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('analysis_trend') }}"><i class="bi bi-graph-up me-2 text-success"></i>추이 분석</a></li>
+          </ul>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" href="{{ url_for('export_excel') }}"><i class="bi bi-file-earmark-excel"></i> 엑셀</a>
+        </li>
+      </ul>
+    </div>
+  </div>
+</nav>
+
+<!-- ══════ 데스크톱 사이드바 (lg 이상) ══════ -->
+<aside class="app-sidebar d-none d-lg-flex">
+  <div class="sidebar-brand">
+    <img src="{{ url_for('static', filename='img/logo.jpg') }}" alt="로고">
+    <div class="sidebar-brand-text">
+      <div class="b1">설비 QR 이력관리</div>
+      <div class="b2">Sinopex MES</div>
+    </div>
+  </div>
+  <nav class="sidebar-nav">
+    <a class="sidebar-link {% if request.endpoint == 'index' %}active{% endif %}" href="{{ url_for('index') }}">
+      <i class="bi bi-speedometer2"></i><span>대시보드</span>
+    </a>
+
+    <div class="sidebar-section">설비</div>
+    <a class="sidebar-link {% if 'equipment' in request.endpoint %}active{% endif %}" href="{{ url_for('equipment_list') }}">
+      <i class="bi bi-cpu"></i><span>설비 목록</span>
+    </a>
+    <a class="sidebar-link {% if request.endpoint == 'qr_all' %}active{% endif %}" href="{{ url_for('qr_all') }}">
+      <i class="bi bi-qr-code"></i><span>QR 코드 전체 인쇄</span>
+    </a>
+
+    <div class="sidebar-section">고장 관리</div>
+    <a class="sidebar-link {% if request.endpoint == 'fault_select' %}active{% endif %}" href="{{ url_for('fault_select') }}">
+      <i class="bi bi-plus-circle-fill"></i><span>고장 등록</span>
+    </a>
+    <a class="sidebar-link {% if request.endpoint in ['fault_list','fault_detail'] %}active{% endif %}" href="{{ url_for('fault_list') }}">
+      <i class="bi bi-exclamation-triangle"></i><span>고장 이력</span>
+    </a>
+
+    <div class="sidebar-section">분석</div>
+    <a class="sidebar-link {% if request.endpoint == 'analysis_repeat' %}active{% endif %}" href="{{ url_for('analysis_repeat') }}">
+      <i class="bi bi-arrow-repeat"></i><span>반복고장 분석</span>
+    </a>
+    <a class="sidebar-link {% if request.endpoint == 'analysis_trend' %}active{% endif %}" href="{{ url_for('analysis_trend') }}">
+      <i class="bi bi-graph-up"></i><span>추이 분석</span>
+    </a>
+
+    <div class="sidebar-section">데이터</div>
+    <a class="sidebar-link" href="{{ url_for('export_excel') }}">
+      <i class="bi bi-file-earmark-excel"></i><span>엑셀 내보내기</span>
+    </a>
+    <a class="sidebar-link" href="#" data-bs-toggle="modal" data-bs-target="#backupModal">
+      <i class="bi bi-cloud-arrow-up-fill"></i><span>백업</span>
+    </a>
+  </nav>
+  <div class="sidebar-foot">Ver. 2.0.0 · © Sinopex</div>
+</aside>
+
+<!-- ══════ 데스크톱 콘텐츠 영역 ══════ -->
+<div class="app-content">
+
+  <!-- 상단 헤더 (lg 이상) -->
+  <header class="app-header d-none d-lg-flex">
+    <button type="button" class="header-toggle-btn" onclick="document.body.classList.toggle('sidebar-collapsed')">
+      <i class="bi bi-list"></i>
+    </button>
+    <form class="header-search" method="get" action="{{ url_for('equipment_list') }}">
+      <div class="header-search-wrap">
+        <i class="bi bi-search"></i>
+        <input type="text" name="q" placeholder="설비명, 설비번호, 위치 검색" autocomplete="off">
+      </div>
+    </form>
+    <div class="header-actions">
+      <a href="{{ url_for('fault_select') }}" class="btn btn-danger btn-sm">
+        <i class="bi bi-exclamation-triangle-fill"></i> 고장 등록
+      </a>
+    </div>
+  </header>
+
+  <!-- 플래시 메시지 -->
+  <div class="flash-zone">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for cat, msg in messages %}
+        <div class="alert alert-{{ cat }} alert-dismissible fade show py-2 mb-2" role="alert">
+          <i class="bi {% if cat == 'success' %}bi-check-circle-fill{% elif cat == 'danger' %}bi-x-circle-fill{% else %}bi-exclamation-circle-fill{% endif %} me-1"></i>
+          {{ msg }}
+          <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+  </div>
+
+  <!-- 메인 콘텐츠 -->
+  <main class="container-fluid pb-4 px-lg-4 pt-lg-4">
+    {% block content %}{% endblock %}
+  </main>
+</div>
+
+<!-- 삭제 권한 확인 모달 (공용) -->
+<div class="modal fade" id="deleteAuthModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered" style="max-width:360px">
+    <div class="modal-content" style="border-radius:14px;overflow:hidden;border:none">
+      <div class="modal-header" style="background:var(--mes-navy);color:#fff;border:none;padding:1rem 1.3rem">
+        <h6 class="modal-title mb-0">
+          <i class="bi bi-shield-lock-fill me-2" style="color:var(--mes-cyan)"></i>삭제 권한 확인
+        </h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-4">
+        <p class="text-muted small mb-3">
+          삭제 작업은 관리자 비밀번호가 필요합니다. 확인 후 다시 삭제 버튼을 눌러주세요.
+        </p>
+        <form method="post" action="{{ url_for('fault_auth') }}">
+          <input type="hidden" name="next" id="deleteAuthNext" value="">
+          <div class="mb-3">
+            <label class="form-label">비밀번호</label>
+            <div class="input-group">
+              <span class="input-group-text" style="background:#f4f7fb;border-color:var(--mes-border)">
+                <i class="bi bi-lock-fill text-muted"></i>
+              </span>
+              <input type="password" name="password" class="form-control"
+                     placeholder="비밀번호 입력" autocomplete="current-password">
+            </div>
+          </div>
+          <div class="d-grid">
+            <button type="submit" class="btn btn-warning" style="min-height:52px;font-size:1rem;color:#fff">
+              <i class="bi bi-unlock-fill me-1"></i> 확인
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 백업 모달 -->
+<div class="modal fade" id="backupModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered" style="max-width:380px">
+    <div class="modal-content" style="border-radius:14px;overflow:hidden;border:none">
+      <div class="modal-header" style="background:var(--mes-navy);color:#fff;border:none;padding:1rem 1.3rem">
+        <h6 class="modal-title mb-0">
+          <i class="bi bi-cloud-arrow-up-fill me-2" style="color:#4fc3f7"></i>데이터 백업
+        </h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-4">
+        <p class="text-muted small mb-3">
+          현재 DB와 모든 데이터를 백업 폴더에 저장합니다.<br>
+          기존 백업 파일은 덮어씌워집니다.
+        </p>
+        <div id="backup-last-info" class="mb-3 p-2 rounded"
+             style="background:#f4f7fb;font-size:0.82rem;color:#546e7a">
+          <i class="bi bi-clock me-1"></i>마지막 백업: <span id="backup-last-time">확인 중...</span>
+        </div>
+        <div id="backup-result" class="mb-3" style="display:none"></div>
+        <div class="d-grid">
+          <button id="backupExecBtn" class="btn btn-primary" style="min-height:52px;font-size:1rem">
+            <i class="bi bi-cloud-arrow-up-fill me-1"></i> 지금 백업 실행
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 하단 퀵메뉴 (모바일) -->
+<div class="mobile-bottom-nav d-lg-none">
+  <a href="{{ url_for('index') }}"
+     class="{% if request.endpoint == 'index' %}active{% endif %}">
+    <i class="bi bi-speedometer2"></i><span>대시보드</span>
+  </a>
+  <a href="{{ url_for('equipment_list') }}"
+     class="{% if 'equipment' in request.endpoint %}active{% endif %}">
+    <i class="bi bi-cpu"></i><span>설비</span>
+  </a>
+  <a href="{{ url_for('fault_select') }}"
+     class="{% if request.endpoint == 'fault_select' %}active{% endif %}"
+     style="color:#00BCD4">
+    <i class="bi bi-plus-circle-fill" style="font-size:1.8rem"></i><span>고장등록</span>
+  </a>
+  <a href="{{ url_for('fault_list') }}"
+     class="{% if request.endpoint == 'fault_list' %}active{% endif %}">
+    <i class="bi bi-exclamation-triangle"></i><span>이력</span>
+  </a>
+  <a href="{{ url_for('analysis_repeat') }}"
+     class="{% if 'analysis' in request.endpoint %}active{% endif %}">
+    <i class="bi bi-bar-chart-line"></i><span>분석</span>
+  </a>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+{% block scripts %}{% endblock %}
+
+<script>
+function openDeleteAuth(nextUrl) {
+  document.getElementById('deleteAuthNext').value = nextUrl;
+  new bootstrap.Modal(document.getElementById('deleteAuthModal')).show();
+}
+
+/* 사이드바 접기 상태 기억 */
+(function() {
+  if (localStorage.getItem('sidebarCollapsed') === '1') {
+    document.body.classList.add('sidebar-collapsed');
+  }
+  document.addEventListener('click', function(e) {
+    if (e.target.closest('.header-toggle-btn')) {
+      setTimeout(function() {
+        localStorage.setItem('sidebarCollapsed', document.body.classList.contains('sidebar-collapsed') ? '1' : '0');
+      }, 0);
+    }
+  });
+})();
+
+/* 백업 모달 */
+document.getElementById('backupModal').addEventListener('show.bs.modal', function() {
+  fetch('/backup/status')
+    .then(r => r.json())
+    .then(d => {
+      document.getElementById('backup-last-time').textContent = d.last || '백업 없음';
+    });
+  document.getElementById('backup-result').style.display = 'none';
+});
+
+document.getElementById('backupExecBtn').addEventListener('click', function() {
+  const btn = this;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>백업 중...';
+
+  fetch('/backup', { method: 'POST' })
+    .then(r => r.json())
+    .then(d => {
+      const res = document.getElementById('backup-result');
+      res.style.display = 'block';
+      if (d.ok) {
+        document.getElementById('backup-last-time').textContent = d.last;
+        res.innerHTML = '<div class="alert alert-success py-2 mb-0"><i class="bi bi-check-circle-fill me-1"></i>백업 완료: ' + d.last + '</div>';
+        btn.innerHTML = '<i class="bi bi-check-circle-fill me-1"></i> 백업 완료';
+        btn.className = 'btn btn-success';
+        setTimeout(() => {
+          btn.innerHTML = '<i class="bi bi-cloud-arrow-up-fill me-1"></i> 지금 백업 실행';
+          btn.className = 'btn btn-primary';
+          btn.disabled = false;
+        }, 3000);
+      } else {
+        res.innerHTML = '<div class="alert alert-danger py-2 mb-0"><i class="bi bi-x-circle-fill me-1"></i>오류: ' + d.error + '</div>';
+        btn.innerHTML = '<i class="bi bi-cloud-arrow-up-fill me-1"></i> 지금 백업 실행';
+        btn.disabled = false;
+      }
+    })
+    .catch(() => {
+      btn.innerHTML = '<i class="bi bi-cloud-arrow-up-fill me-1"></i> 지금 백업 실행';
+      btn.disabled = false;
+    });
+});
+</script>
+</body>
+</html>

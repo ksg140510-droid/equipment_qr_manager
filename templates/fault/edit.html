@@ -1,0 +1,520 @@
+{% extends 'base.html' %}
+{% block title %}고장 이력 수정 - {{ fault.eq_name }}{% endblock %}
+
+{% block content %}
+<div class="row mt-3 justify-content-center">
+  <div class="col-12 col-md-9 col-lg-7">
+
+    <div class="app-breadcrumb">
+      <a href="{{ url_for('index') }}">Home</a><span class="sep">/</span>
+      <a href="{{ url_for('fault_detail', fault_id=fault.id) }}">고장 상세</a><span class="sep">/</span>
+      <span class="current">수정</span>
+    </div>
+    <div class="page-header">
+      <h1 class="page-title">
+        <i class="bi bi-pencil-square" style="color:var(--mes-warning)"></i>고장 이력 수정
+      </h1>
+      <a href="{{ url_for('fault_detail', fault_id=fault.id) }}"
+         class="btn btn-outline-secondary btn-sm">
+        <i class="bi bi-arrow-left"></i> 취소
+      </a>
+    </div>
+
+    <div class="card mb-3" style="border-left:4px solid var(--mes-warning) !important;">
+      <div class="card-body py-2">
+        <div class="row g-2 align-items-center">
+          <div class="col-6 col-md-3">
+            <div class="text-muted" style="font-size:.72rem;font-weight:700;text-transform:uppercase">설비번호</div>
+            <div class="fw-bold" style="color:var(--mes-blue)">{{ fault.eq_number }}</div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="text-muted" style="font-size:.72rem;font-weight:700;text-transform:uppercase">설비명</div>
+            <div class="fw-bold">{{ fault.eq_name }}</div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="text-muted" style="font-size:.72rem;font-weight:700;text-transform:uppercase">발생일시</div>
+            <div class="small">{{ fault.occurred_at[:16] }}</div>
+          </div>
+          <div class="col-6 col-md-3 text-end">
+            <span class="badge" style="background:#fff8e1;color:#E65100;border:1.5px solid #ffe082;font-size:0.78rem">
+              <i class="bi bi-shield-lock-fill me-1"></i>관리자 수정 모드
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header ch-warning">
+        <i class="bi bi-pencil-fill"></i> 수정 내용 입력
+      </div>
+      <div class="card-body">
+        <form method="post" enctype="multipart/form-data" id="editForm">
+
+          <!-- 발생일시 -->
+          <div class="mb-3">
+            <label class="form-label">발생일시 <span class="req">*</span></label>
+            <input type="datetime-local" name="occurred_at" class="form-control"
+                   value="{{ occurred_at_val }}" required>
+          </div>
+
+          <!-- 고장등급 -->
+          <div class="mb-3">
+            <label class="form-label">고장등급 <span class="req">*</span></label>
+            <div class="grade-radio-group">
+              {% for val, label in grades %}
+              <input type="radio" class="btn-check" name="grade"
+                     id="grade_{{ val }}" value="{{ val }}"
+                     {% if fault.grade == val %}checked{% endif %} required>
+              <label class="btn {% if val == 'A' %}btn-outline-danger{% elif val == 'B' %}btn-outline-warning{% elif val == 'C' %}btn-outline-success{% else %}btn-outline-secondary{% endif %}"
+                     for="grade_{{ val }}">
+                <strong style="font-size:1.3rem">{{ val }}</strong>
+                <span style="font-size:0.78rem">{{ label.split(':')[1].strip() }}</span>
+              </label>
+              {% endfor %}
+            </div>
+            <div id="grade-d-wrap" class="mt-2"
+                 style="display:{% if fault.grade == 'D' %}block{% else %}none{% endif %}">
+              <input type="text" name="grade_note" id="grade-note-text" class="form-control"
+                     placeholder="기타 내용을 입력하세요 (예: 청소요청, 예방점검 등)" maxlength="100"
+                     value="{{ fault.grade_note or '' }}">
+            </div>
+          </div>
+
+          <!-- 처리상태 -->
+          <div class="mb-3">
+            <label class="form-label">처리 상태 <span class="req">*</span></label>
+            <div class="d-flex gap-2">
+              {% for s in statuses %}
+              <input type="radio" class="btn-check" name="status"
+                     id="status_{{ loop.index }}" value="{{ s }}"
+                     {% if (fault.status or '미조치') == s %}checked{% endif %}>
+              <label class="btn flex-fill text-center
+                {% if s == '미조치' %}btn-outline-danger
+                {% elif s == '진행중' %}btn-outline-warning
+                {% elif s == '대기' %}btn-outline-info
+                {% else %}btn-outline-success{% endif %}"
+                for="status_{{ loop.index }}" style="min-height:52px;font-size:0.9rem">
+                {% if s == '완료' %}<i class="bi bi-check-circle-fill d-block" style="font-size:1.2rem"></i>
+                {% elif s == '진행중' %}<i class="bi bi-hourglass-split d-block" style="font-size:1.2rem"></i>
+                {% elif s == '대기' %}<i class="bi bi-pause-circle-fill d-block" style="font-size:1.2rem"></i>
+                {% else %}<i class="bi bi-exclamation-circle-fill d-block" style="font-size:1.2rem"></i>{% endif %}
+                {{ s }}
+              </label>
+              {% endfor %}
+            </div>
+            <!-- 대기 사유 -->
+            <div id="status-wait-wrap" class="mt-2"
+                 style="display:{% if (fault.status or '미조치') == '대기' %}block{% else %}none{% endif %}">
+              <input type="text" name="status_note" id="status-note-text" class="form-control"
+                     placeholder="대기 사유를 입력하세요 (예: 부품 발주 후 대기중)" maxlength="100"
+                     value="{{ fault.status_note or '' }}">
+            </div>
+          </div>
+
+          <!-- 증상 -->
+          <div class="mb-3">
+            <label class="form-label">증상 <span class="req">*</span>
+              <span class="text-muted fw-normal" style="font-size:0.73rem">(복수 선택 가능)</span>
+            </label>
+            <div class="symptom-check-group" id="symptomGroup">
+              {% for s in symptoms %}
+              <input type="checkbox" class="btn-check" name="symptom[]"
+                     id="sym_{{ loop.index }}" value="{{ s }}"
+                     {% if s in selected_symptoms %}checked{% endif %}
+                     {% if s == '기타' %}data-other="true"{% endif %}>
+              <label class="btn btn-outline-secondary" for="sym_{{ loop.index }}">{{ s }}</label>
+              {% endfor %}
+            </div>
+            <div id="sym-other-wrap" class="mt-2"
+                 style="display:{% if '기타' in selected_symptoms %}block{% else %}none{% endif %}">
+              <input type="text" id="sym-other-text" class="form-control"
+                     placeholder="기타 증상 내용을 직접 입력하세요" maxlength="80"
+                     value="{% for sv in selected_symptoms %}{% if sv not in symptoms and sv %}{{ sv }}{% endif %}{% endfor %}">
+            </div>
+            <div id="symptom-error" class="text-danger small mt-1" style="display:none">
+              증상을 하나 이상 선택하세요.
+            </div>
+          </div>
+
+          <!-- 원인 -->
+          <div class="mb-3">
+            <label class="form-label">원인</label>
+            <textarea name="cause" class="form-control" rows="2">{{ fault.cause or '' }}</textarea>
+          </div>
+
+          <!-- 조치내용 -->
+          <div class="mb-3">
+            <label class="form-label">조치내용</label>
+            <textarea name="action_detail" class="form-control" rows="3">{{ fault.action_detail or '' }}</textarea>
+          </div>
+
+          <!-- 사용부품 -->
+          <div class="mb-3">
+            <label class="form-label">사용부품</label>
+            <div id="parts-container">
+              {% if parts %}
+                {% for p in parts %}
+                <div class="parts-row mb-2">
+                  <div class="row g-2">
+                    <div class="col-12 col-sm-5">
+                      <select name="part_name[]" class="form-select form-select-sm part-select">
+                        <option value="">부품 선택</option>
+                        {% for pl in parts_list %}
+                        <option value="{{ pl }}" {% if p.part_name == pl %}selected{% endif %}>{{ pl }}</option>
+                        {% endfor %}
+                        <option value="기타" {% if p.part_name not in parts_list and p.part_name %}selected{% endif %}>기타 (직접입력)</option>
+                      </select>
+                      <input type="text" name="part_custom[]"
+                             class="form-control form-control-sm part-custom mt-1"
+                             placeholder="부품명 직접 입력" maxlength="50"
+                             value="{% if p.part_name not in parts_list and p.part_name %}{{ p.part_name }}{% endif %}"
+                             style="display:{% if p.part_name not in parts_list and p.part_name %}block{% else %}none{% endif %}">
+                    </div>
+                    <div class="col-4 col-sm-2">
+                      <input type="number" name="part_qty[]" class="form-control form-control-sm"
+                             value="{{ p.quantity }}" min="1">
+                    </div>
+                    <div class="col-6 col-sm-4">
+                      <input type="text" name="part_note[]" class="form-control form-control-sm"
+                             value="{{ p.note or '' }}" placeholder="비고">
+                    </div>
+                    <div class="col-2 col-sm-1 d-flex align-items-start pt-1">
+                      <button type="button" class="btn btn-outline-danger btn-xs remove-part"
+                              style="{% if loop.first and parts|length == 1 %}display:none{% else %}display:flex{% endif %};min-width:36px">
+                        <i class="bi bi-x"></i>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                {% endfor %}
+              {% else %}
+              <div class="parts-row mb-2">
+                <div class="row g-2">
+                  <div class="col-12 col-sm-5">
+                    <select name="part_name[]" class="form-select form-select-sm part-select">
+                      <option value="">부품 선택</option>
+                      {% for pl in parts_list %}
+                      <option value="{{ pl }}">{{ pl }}</option>
+                      {% endfor %}
+                      <option value="기타">기타 (직접입력)</option>
+                    </select>
+                    <input type="text" name="part_custom[]"
+                           class="form-control form-control-sm part-custom mt-1"
+                           placeholder="부품명 직접 입력" maxlength="50" style="display:none">
+                  </div>
+                  <div class="col-4 col-sm-2">
+                    <input type="number" name="part_qty[]" class="form-control form-control-sm"
+                           value="1" min="1">
+                  </div>
+                  <div class="col-6 col-sm-4">
+                    <input type="text" name="part_note[]" class="form-control form-control-sm" placeholder="비고">
+                  </div>
+                  <div class="col-2 col-sm-1 d-flex align-items-start pt-1">
+                    <button type="button" class="btn btn-outline-danger btn-xs remove-part"
+                            style="display:none;min-width:36px">
+                      <i class="bi bi-x"></i>
+                    </button>
+                  </div>
+                </div>
+              </div>
+              {% endif %}
+            </div>
+            <button type="button" id="add-part" class="btn btn-outline-secondary btn-sm mt-1">
+              <i class="bi bi-plus-circle"></i> 부품 추가
+            </button>
+          </div>
+
+          <!-- 작업자 (기존 목록 선택 또는 신규 입력) -->
+          <div class="mb-3">
+            <label class="form-label">작업자</label>
+            <input type="text" name="worker" class="form-control"
+                   list="workerList" placeholder="작업자 이름 선택 또는 직접 입력" autocomplete="off"
+                   value="{{ fault.worker or '' }}">
+            <datalist id="workerList">
+              {% for w in workers %}
+              <option value="{{ w }}">
+              {% endfor %}
+            </datalist>
+            <div class="form-text" style="font-size:0.72rem">목록에 없으면 새 이름을 입력하면 자동으로 추가됩니다.</div>
+          </div>
+
+          <!-- 완료일 -->
+          <div class="mb-3">
+            <label class="form-label">완료일</label>
+            <input type="date" name="completed_at" class="form-control"
+                   value="{{ fault.completed_at or '' }}">
+          </div>
+
+          <!-- 기존 고장 사진 -->
+          {% if fault_photos or fault.photo_fault %}
+          <div class="mb-3">
+            <label class="form-label">
+              <i class="bi bi-camera me-1" style="color:var(--mes-danger)"></i>
+              <strong>기존 고장 사진</strong>
+            </label>
+            <div class="row g-2">
+              {% for p in fault_photos %}
+              <div class="col-6 col-md-4">
+                <img src="{{ url_for('uploaded_file', subfolder='photos', filename=p.filename) }}"
+                     class="img-fluid rounded" style="height:90px;width:100%;object-fit:cover;border:2px solid var(--mes-border)">
+                {% if p.label %}<div class="text-muted small mt-1 text-truncate">{{ p.label }}</div>{% endif %}
+                <div class="form-check mt-1">
+                  <input class="form-check-input" type="checkbox" name="delete_photo[]"
+                         value="{{ p.id }}" id="del_{{ p.id }}">
+                  <label class="form-check-label text-danger small" for="del_{{ p.id }}">
+                    <i class="bi bi-trash me-1"></i>삭제
+                  </label>
+                </div>
+              </div>
+              {% endfor %}
+              {% if fault.photo_fault %}
+              <div class="col-6 col-md-4">
+                <img src="{{ url_for('uploaded_file', subfolder='fault', filename=fault.photo_fault) }}"
+                     class="img-fluid rounded" style="height:90px;width:100%;object-fit:cover;border:2px solid var(--mes-border)">
+                <div class="text-muted small mt-1">고장사진 (구형식)</div>
+              </div>
+              {% endif %}
+            </div>
+          </div>
+          {% endif %}
+
+          <!-- 기존 완료 사진 -->
+          {% if action_photos or fault.photo_action %}
+          <div class="mb-3">
+            <label class="form-label">
+              <i class="bi bi-camera-fill me-1" style="color:var(--mes-success)"></i>
+              <strong>기존 완료 사진</strong>
+            </label>
+            <div class="row g-2">
+              {% for p in action_photos %}
+              <div class="col-6 col-md-4">
+                <img src="{{ url_for('uploaded_file', subfolder='photos', filename=p.filename) }}"
+                     class="img-fluid rounded" style="height:90px;width:100%;object-fit:cover;border:2px solid var(--mes-border)">
+                {% if p.label %}<div class="text-muted small mt-1 text-truncate">{{ p.label }}</div>{% endif %}
+                <div class="form-check mt-1">
+                  <input class="form-check-input" type="checkbox" name="delete_photo[]"
+                         value="{{ p.id }}" id="dela_{{ p.id }}">
+                  <label class="form-check-label text-danger small" for="dela_{{ p.id }}">
+                    <i class="bi bi-trash me-1"></i>삭제
+                  </label>
+                </div>
+              </div>
+              {% endfor %}
+              {% if fault.photo_action %}
+              <div class="col-6 col-md-4">
+                <img src="{{ url_for('uploaded_file', subfolder='action', filename=fault.photo_action) }}"
+                     class="img-fluid rounded" style="height:90px;width:100%;object-fit:cover;border:2px solid var(--mes-border)">
+                <div class="text-muted small mt-1">조치사진 (구형식)</div>
+              </div>
+              {% endif %}
+            </div>
+          </div>
+          {% endif %}
+
+          <!-- 고장 사진 추가 -->
+          <div class="mb-3">
+            <label class="form-label">
+              <i class="bi bi-camera me-1" style="color:var(--mes-danger)"></i>
+              <strong>고장 사진 추가</strong>
+              <span class="text-muted fw-normal" style="font-size:0.73rem">(최대 5장)</span>
+            </label>
+            <div id="fault-photo-container">
+              <div class="photo-item mb-2">
+                <div class="row g-2 align-items-center">
+                  <div class="col-6 col-md-5">
+                    <input type="file" name="fault_photos[]" class="form-control form-control-sm"
+                           accept="image/*" capture="environment">
+                  </div>
+                  <div class="col-5 col-md-6">
+                    <input type="text" name="fault_photo_labels[]" class="form-control form-control-sm"
+                           placeholder="라벨 (예: 전체, 부위)" maxlength="20">
+                  </div>
+                  <div class="col-1">
+                    <button type="button" class="btn btn-outline-danger btn-xs remove-photo"
+                            style="display:none;min-width:36px"><i class="bi bi-x"></i></button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <button type="button" class="add-photo-btn btn btn-outline-secondary btn-sm mt-1"
+                    data-container="fault-photo-container"
+                    data-count-id="fault-photo-count">
+              <i class="bi bi-plus-circle"></i> 사진 추가
+              <span id="fault-photo-count" class="badge ms-1"
+                    style="background:rgba(21,101,192,.12);color:var(--mes-blue);font-size:0.73rem">1 / 5</span>
+            </button>
+          </div>
+
+          <!-- 완료 사진 추가 -->
+          <div class="mb-4">
+            <label class="form-label">
+              <i class="bi bi-camera-fill me-1" style="color:var(--mes-success)"></i>
+              <strong>완료 사진 추가</strong>
+              <span class="text-muted fw-normal" style="font-size:0.73rem">(최대 5장)</span>
+            </label>
+            <div id="action-photo-container">
+              <div class="photo-item mb-2">
+                <div class="row g-2 align-items-center">
+                  <div class="col-6 col-md-5">
+                    <input type="file" name="action_photos[]" class="form-control form-control-sm"
+                           accept="image/*" capture="environment">
+                  </div>
+                  <div class="col-5 col-md-6">
+                    <input type="text" name="action_photo_labels[]" class="form-control form-control-sm"
+                           placeholder="라벨 (예: 조치후, 완료)" maxlength="20">
+                  </div>
+                  <div class="col-1">
+                    <button type="button" class="btn btn-outline-danger btn-xs remove-photo"
+                            style="display:none;min-width:36px"><i class="bi bi-x"></i></button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <button type="button" class="add-photo-btn btn btn-outline-secondary btn-sm mt-1"
+                    data-container="action-photo-container"
+                    data-count-id="action-photo-count">
+              <i class="bi bi-plus-circle"></i> 사진 추가
+              <span id="action-photo-count" class="badge ms-1"
+                    style="background:rgba(21,101,192,.12);color:var(--mes-blue);font-size:0.73rem">1 / 5</span>
+            </button>
+          </div>
+
+          <div class="d-grid gap-2">
+            <button type="submit" class="btn btn-warning btn-xl" style="color:#fff">
+              <i class="bi bi-check-circle-fill"></i> 수정 완료 저장
+            </button>
+            <a href="{{ url_for('fault_detail', fault_id=fault.id) }}"
+               class="btn btn-outline-secondary">취소</a>
+          </div>
+
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* D등급 기타 내용 */
+document.querySelectorAll('input[name="grade"]').forEach(function(radio) {
+  radio.addEventListener('change', function() {
+    const wrap = document.getElementById('grade-d-wrap');
+    wrap.style.display = this.value === 'D' ? 'block' : 'none';
+    if (this.value !== 'D') document.getElementById('grade-note-text').value = '';
+    if (this.value === 'D') document.getElementById('grade-note-text').focus();
+  });
+});
+
+/* 대기 상태 사유 입력 */
+document.querySelectorAll('input[name="status"]').forEach(function(radio) {
+  radio.addEventListener('change', function() {
+    const wrap = document.getElementById('status-wait-wrap');
+    wrap.style.display = this.value === '대기' ? 'block' : 'none';
+    if (this.value !== '대기') document.getElementById('status-note-text').value = '';
+    if (this.value === '대기') document.getElementById('status-note-text').focus();
+  });
+});
+
+/* 증상 기타 */
+const otherCheck = document.querySelector('input[data-other="true"]');
+const otherWrap  = document.getElementById('sym-other-wrap');
+const otherText  = document.getElementById('sym-other-text');
+if (otherCheck) {
+  otherCheck.addEventListener('change', function() {
+    otherWrap.style.display = this.checked ? 'block' : 'none';
+    if (this.checked) otherText.focus();
+    else otherText.value = '';
+  });
+}
+
+/* 부품 기타 */
+document.getElementById('parts-container').addEventListener('change', function(e) {
+  if (e.target.classList.contains('part-select')) {
+    const custom = e.target.closest('.parts-row').querySelector('.part-custom');
+    if (e.target.value === '기타') { custom.style.display = 'block'; custom.focus(); }
+    else { custom.style.display = 'none'; custom.value = ''; }
+  }
+});
+
+/* 부품 행 추가 */
+document.getElementById('add-part').addEventListener('click', function() {
+  const container = document.getElementById('parts-container');
+  const clone = container.querySelector('.parts-row').cloneNode(true);
+  clone.querySelectorAll('select').forEach(el => el.selectedIndex = 0);
+  clone.querySelectorAll('input[type="number"]').forEach(el => el.value = 1);
+  clone.querySelectorAll('input[type="text"]').forEach(el => {
+    el.value = '';
+    if (el.classList.contains('part-custom')) el.style.display = 'none';
+  });
+  const rmBtn = clone.querySelector('.remove-part');
+  rmBtn.style.display = 'flex';
+  rmBtn.addEventListener('click', function() {
+    clone.remove();
+    const rows = container.querySelectorAll('.parts-row');
+    if (rows.length === 1) rows[0].querySelector('.remove-part').style.display = 'none';
+  });
+  container.appendChild(clone);
+  container.querySelectorAll('.remove-part').forEach(b => b.style.display = 'flex');
+});
+
+/* 사진 추가 공용 */
+function updateCount(cid, countId) {
+  const cnt = document.getElementById(cid).querySelectorAll('.photo-item').length;
+  document.getElementById(countId).textContent = cnt + ' / 5';
+  return cnt;
+}
+document.querySelectorAll('.add-photo-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    const cid     = this.dataset.container;
+    const countId = this.dataset.countId;
+    const container = document.getElementById(cid);
+    if (container.querySelectorAll('.photo-item').length >= 5) return;
+    const clone = container.querySelector('.photo-item').cloneNode(true);
+    clone.querySelector('input[type="file"]').value = '';
+    clone.querySelector('input[type="text"]').value = '';
+    const rmBtn = clone.querySelector('.remove-photo');
+    rmBtn.style.display = 'flex';
+    rmBtn.addEventListener('click', function() {
+      clone.remove();
+      updateCount(cid, countId);
+      btn.disabled = container.querySelectorAll('.photo-item').length >= 5;
+      container.querySelectorAll('.photo-item').forEach(item => {
+        item.querySelector('.remove-photo').style.display =
+          container.querySelectorAll('.photo-item').length > 1 ? 'flex' : 'none';
+      });
+    });
+    container.appendChild(clone);
+    btn.disabled = updateCount(cid, countId) >= 5;
+    container.querySelectorAll('.photo-item').forEach(item => {
+      item.querySelector('.remove-photo').style.display = 'flex';
+    });
+  });
+});
+
+/* 폼 제출 */
+document.getElementById('editForm').addEventListener('submit', function(e) {
+  if (otherCheck && otherCheck.checked && otherText.value.trim())
+    otherCheck.value = otherText.value.trim();
+  document.querySelectorAll('.parts-row').forEach(row => {
+    const sel = row.querySelector('.part-select');
+    const custom = row.querySelector('.part-custom');
+    if (sel && sel.value === '기타' && custom && custom.value.trim()) {
+      const hid = document.createElement('input');
+      hid.type = 'hidden'; hid.name = 'part_name[]'; hid.value = custom.value.trim();
+      row.appendChild(hid); sel.removeAttribute('name');
+    }
+  });
+  const checked = document.querySelectorAll('input[name="symptom[]"]:checked');
+  const err = document.getElementById('symptom-error');
+  if (checked.length === 0) {
+    e.preventDefault();
+    err.style.display = 'block';
+    document.getElementById('symptomGroup').scrollIntoView({behavior:'smooth', block:'center'});
+  } else {
+    err.style.display = 'none';
+  }
+});
+</script>
+{% endblock %}

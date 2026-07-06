@@ -1,0 +1,134 @@
+{% extends 'base.html' %}
+{% block title %}고장 등록 — 설비 선택{% endblock %}
+
+{% block content %}
+<div class="row mt-3 g-3">
+
+  <!-- 페이지 헤더 -->
+  <div class="col-12">
+    <div class="app-breadcrumb">
+      <a href="{{ url_for('index') }}">Home</a><span class="sep">/</span><span class="current">고장 등록</span>
+    </div>
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">
+          <i class="bi bi-plus-circle-fill" style="color:var(--mes-danger)"></i>고장 / 이상 등록
+        </h1>
+        <div class="page-subtitle">설비를 선택하면 등록 화면으로 이동합니다</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 검색 / 섹션 필터 -->
+  <div class="col-12">
+    <div class="search-panel">
+      <form method="get" class="row g-2 align-items-end">
+        <div class="col-12 col-md-5">
+          <label class="form-label">설비 검색</label>
+          <input type="text" name="q" value="{{ q }}"
+                 class="form-control"
+                 placeholder="설비번호 / 설비명 / 위치"
+                 autofocus>
+        </div>
+        <div class="col-8 col-md-4">
+          <label class="form-label">섹션</label>
+          <select name="section" class="form-select">
+            <option value="">전체 섹션</option>
+            {% for s in sections %}
+            <option value="{{ s }}" {% if sec == s %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-4 col-md-3">
+          <button class="btn btn-primary w-100">
+            <i class="bi bi-search"></i> 검색
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 결과 -->
+  <div class="col-12">
+    <div class="d-flex align-items-center gap-2 mb-2">
+      <small class="text-muted">
+        <i class="bi bi-list-ul me-1"></i>설비 <strong>{{ equipments|length }}</strong>개
+      </small>
+    </div>
+
+    <!-- PC 테이블 -->
+    <div class="card d-none d-md-block">
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>설비번호</th>
+              <th>설비명</th>
+              <th>섹션</th>
+              <th>위치</th>
+              <th class="text-center" style="min-width:120px">고장등록</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for eq in equipments %}
+            <tr>
+              <td class="fw-bold" style="color:var(--mes-blue)">{{ eq.eq_number }}</td>
+              <td class="fw-bold">{{ eq.eq_name }}</td>
+              <td><span class="badge bg-section">{{ eq.section }}</span></td>
+              <td class="text-muted">{{ eq.location or '-' }}</td>
+              <td class="text-center">
+                <a href="{{ url_for('fault_register', eq_id=eq.id) }}"
+                   class="btn btn-danger btn-sm">
+                  <i class="bi bi-exclamation-triangle-fill"></i> 고장등록
+                </a>
+              </td>
+            </tr>
+            {% endfor %}
+            {% if not equipments %}
+            <tr>
+              <td colspan="5" class="text-center text-muted py-5">
+                <i class="bi bi-inbox fs-2 d-block mb-2"></i>검색 결과가 없습니다.
+              </td>
+            </tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 모바일 카드 목록 -->
+    <div class="d-md-none">
+      {% for eq in equipments %}
+      <a href="{{ url_for('fault_register', eq_id=eq.id) }}"
+         class="text-decoration-none">
+        <div class="card mb-2" style="border-left:4px solid var(--mes-danger) !important;">
+          <div class="card-body py-3 px-3 d-flex justify-content-between align-items-center">
+            <div>
+              <div class="fw-bold" style="color:var(--mes-blue);font-size:1rem">{{ eq.eq_number }}</div>
+              <div class="fw-bold text-dark">{{ eq.eq_name }}</div>
+              <div class="mt-1">
+                <span class="badge bg-section me-1">{{ eq.section }}</span>
+                {% if eq.location %}
+                <span class="text-muted small"><i class="bi bi-geo-alt"></i> {{ eq.location }}</span>
+                {% endif %}
+              </div>
+            </div>
+            <div class="ms-3">
+              <span class="btn btn-danger btn-sm">
+                <i class="bi bi-chevron-right"></i>
+              </span>
+            </div>
+          </div>
+        </div>
+      </a>
+      {% endfor %}
+      {% if not equipments %}
+      <div class="text-center text-muted py-5">
+        <i class="bi bi-inbox fs-1 d-block mb-2"></i>검색 결과가 없습니다.
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+{% endblock %}

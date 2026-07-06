@@ -1,0 +1,264 @@
+{% extends 'base.html' %}
+{% block title %}고장 이력 조회{% endblock %}
+
+{% block content %}
+<div class="row mt-3 g-3">
+
+  <!-- 페이지 헤더 -->
+  <div class="col-12">
+    <div class="app-breadcrumb">
+      <a href="{{ url_for('index') }}">Home</a><span class="sep">/</span>
+      <a href="{{ url_for('fault_select') }}">고장 관리</a><span class="sep">/</span>
+      <span class="current">고장 이력</span>
+    </div>
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">
+          <i class="bi bi-exclamation-triangle" style="color:var(--mes-danger)"></i>고장 이력 조회
+        </h1>
+        <div class="page-subtitle">{{ faults|length }}건 조회됨</div>
+      </div>
+      <a href="{{ url_for('export_excel') }}?date_from={{ date_from }}&date_to={{ date_to }}&symptom={{ sym }}"
+         class="btn btn-success">
+        <i class="bi bi-file-earmark-excel"></i> 엑셀 다운로드
+      </a>
+    </div>
+  </div>
+
+  <!-- 상태별 빠른 필터 버튼 -->
+  <div class="col-12">
+    <div class="d-flex gap-2 flex-wrap">
+      <a href="{{ url_for('fault_list') }}{% if q or sym or grade or date_from or date_to %}?q={{ q }}&symptom={{ sym }}&grade={{ grade }}&date_from={{ date_from }}&date_to={{ date_to }}{% endif %}"
+         class="btn btn-sm {% if not status %}btn-secondary{% else %}btn-outline-secondary{% endif %}">
+        <i class="bi bi-list-ul"></i> 전체
+      </a>
+      <a href="{{ url_for('fault_list') }}?status=미조치{% if q %}&q={{ q }}{% endif %}{% if grade %}&grade={{ grade }}{% endif %}{% if date_from %}&date_from={{ date_from }}{% endif %}{% if date_to %}&date_to={{ date_to }}{% endif %}"
+         class="btn btn-sm {% if status == '미조치' %}btn-danger{% else %}btn-outline-danger{% endif %}">
+        <i class="bi bi-exclamation-circle"></i> 미조치
+      </a>
+      <a href="{{ url_for('fault_list') }}?status=진행중{% if q %}&q={{ q }}{% endif %}{% if grade %}&grade={{ grade }}{% endif %}{% if date_from %}&date_from={{ date_from }}{% endif %}{% if date_to %}&date_to={{ date_to }}{% endif %}"
+         class="btn btn-sm {% if status == '진행중' %}btn-warning{% else %}btn-outline-warning{% endif %}" style="color:{% if status != '진행중' %}#E65100{% endif %}">
+        <i class="bi bi-hourglass-split"></i> 진행중
+      </a>
+      <a href="{{ url_for('fault_list') }}?status=대기{% if q %}&q={{ q }}{% endif %}{% if grade %}&grade={{ grade }}{% endif %}{% if date_from %}&date_from={{ date_from }}{% endif %}{% if date_to %}&date_to={{ date_to }}{% endif %}"
+         class="btn btn-sm {% if status == '대기' %}btn-info{% else %}btn-outline-info{% endif %}">
+        <i class="bi bi-pause-circle"></i> 대기
+      </a>
+      <a href="{{ url_for('fault_list') }}?status=완료{% if q %}&q={{ q }}{% endif %}{% if grade %}&grade={{ grade }}{% endif %}{% if date_from %}&date_from={{ date_from }}{% endif %}{% if date_to %}&date_to={{ date_to }}{% endif %}"
+         class="btn btn-sm {% if status == '완료' %}btn-success{% else %}btn-outline-success{% endif %}">
+        <i class="bi bi-check-circle"></i> 완료
+      </a>
+      <span class="ms-auto text-muted small align-self-center">
+        <strong>{{ faults|length }}</strong>건 조회됨
+      </span>
+    </div>
+  </div>
+
+  <!-- 검색 필터 패널 -->
+  <div class="col-12">
+    <div class="search-panel">
+      <form method="get" class="row g-2">
+        <input type="hidden" name="status" value="{{ status }}">
+        <div class="col-12 col-md-3">
+          <label class="form-label">통합 검색</label>
+          <div class="input-group">
+            <span class="input-group-text" style="background:#f4f7fb;border-color:var(--mes-border)">
+              <i class="bi bi-search text-muted"></i>
+            </span>
+            <input type="text" name="q" value="{{ q }}"
+                   class="form-control form-control-sm"
+                   placeholder="설비번호 / 설비명 / 증상 / 작업자">
+          </div>
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label">증상</label>
+          <select name="symptom" class="form-select form-select-sm">
+            <option value="">전체</option>
+            {% for s in symptoms %}
+            <option value="{{ s }}" {% if sym == s %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label">등급</label>
+          <select name="grade" class="form-select form-select-sm">
+            <option value="">전체 등급</option>
+            {% for val, label in grades %}
+            <option value="{{ val }}" {% if grade == val %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label">시작일</label>
+          <input type="date" name="date_from" value="{{ date_from }}"
+                 class="form-control form-control-sm">
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label">종료일</label>
+          <input type="date" name="date_to" value="{{ date_to }}"
+                 class="form-control form-control-sm">
+        </div>
+        <div class="col-6 col-md-1 d-flex align-items-end gap-1">
+          <button class="btn btn-primary btn-sm flex-fill">
+            <i class="bi bi-funnel"></i>
+          </button>
+          <a href="{{ url_for('fault_list') }}"
+             class="btn btn-outline-secondary btn-sm flex-fill">
+            <i class="bi bi-x-lg"></i>
+          </a>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- PC 테이블 -->
+  <div class="col-12 d-none d-md-block">
+    <div class="card">
+      <div class="table-responsive">
+        <table class="table mb-0">
+          <thead>
+            <tr>
+              <th style="width:44px">No</th>
+              <th>설비번호</th>
+              <th>설비명</th>
+              <th>발생일시</th>
+              <th>증상</th>
+              <th>원인</th>
+              <th>작업자</th>
+              <th class="text-center">등급</th>
+              <th class="text-center">상태</th>
+              <th class="text-center" style="width:72px">상세</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for f in faults %}
+            {% set fstatus = f.status or '미조치' %}
+            <tr class="row-status-{{ fstatus }}">
+              <td class="text-muted" style="font-size:0.8rem">{{ loop.revindex }}</td>
+              <td class="fw-bold" style="color:var(--mes-blue);white-space:nowrap">{{ f.eq_number }}</td>
+              <td style="white-space:nowrap">{{ f.eq_name }}</td>
+              <td style="white-space:nowrap;font-size:0.83rem">{{ f.occurred_at[:16] }}</td>
+              <td>
+                <div style="width:220px;white-space:normal;">
+                {% for s in (f.symptom or '-').split(', ') %}
+                  {% if s and s != '-' %}
+                  <span class="badge mb-1" style="background:#f0f4ff;color:var(--mes-blue);border:1px solid #c5d4f5;font-size:0.72rem;white-space:normal;">{{ s }}</span>
+                  {% else %}-{% endif %}
+                {% endfor %}
+                </div>
+              </td>
+              <td class="text-truncate text-muted" style="max-width:130px;font-size:0.83rem">{{ f.cause or '-' }}</td>
+              <td style="white-space:nowrap;font-size:0.85rem">{{ f.worker or '-' }}</td>
+              <td class="text-center">
+                <span class="badge {% if f.grade == 'A' %}bg-grade-a{% elif f.grade == 'B' %}bg-grade-b{% elif f.grade == 'C' %}bg-grade-c{% else %}bg-grade-d{% endif %}">
+                  {{ f.grade }}
+                </span>
+              </td>
+              <td class="text-center">
+                <span class="badge badge-status badge-status-{{ fstatus }}">
+                  {% if fstatus == '완료' %}<i class="bi bi-check-circle-fill me-1"></i>
+                  {% elif fstatus == '진행중' %}<i class="bi bi-hourglass-split me-1"></i>
+                  {% elif fstatus == '대기' %}<i class="bi bi-pause-circle-fill me-1"></i>
+                  {% else %}<i class="bi bi-exclamation-circle-fill me-1"></i>
+                  {% endif %}{{ fstatus }}
+                </span>
+              </td>
+              <td class="text-center">
+                <a href="{{ url_for('fault_detail', fault_id=f.id) }}"
+                   class="btn btn-outline-primary btn-xs">
+                  <i class="bi bi-search"></i>
+                </a>
+              </td>
+            </tr>
+            {% endfor %}
+            {% if not faults %}
+            <tr>
+              <td colspan="10" class="text-center text-muted py-5">
+                <i class="bi bi-inbox fs-2 d-block mb-2"></i>조회된 이력이 없습니다.
+              </td>
+            </tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- 모바일 카드 -->
+  <div class="col-12 d-md-none">
+    {% for f in faults %}
+    {% set fstatus = f.status or '미조치' %}
+    <div class="card mb-2 status-card-{{ fstatus }}">
+      <div class="card-body py-2 px-3">
+        <div class="d-flex justify-content-between align-items-center mb-1">
+          <div class="d-flex align-items-center gap-2">
+            <span class="fw-bold" style="color:var(--mes-blue)">{{ f.eq_number }}</span>
+            <span class="badge {% if f.grade == 'A' %}bg-grade-a{% elif f.grade == 'B' %}bg-grade-b{% elif f.grade == 'C' %}bg-grade-c{% else %}bg-grade-d{% endif %}">
+              {{ f.grade }}
+            </span>
+          </div>
+          <span class="badge badge-status badge-status-{{ fstatus }}">
+            {% if fstatus == '완료' %}<i class="bi bi-check-circle-fill me-1"></i>
+            {% elif fstatus == '진행중' %}<i class="bi bi-hourglass-split me-1"></i>
+            {% else %}<i class="bi bi-exclamation-circle-fill me-1"></i>
+            {% endif %}{{ fstatus }}
+          </span>
+        </div>
+        <div class="fw-bold mb-1" style="font-size:0.97rem">{{ f.eq_name }}</div>
+        <div class="text-muted small mb-1">
+          <i class="bi bi-clock me-1"></i>{{ f.occurred_at[:16] }}
+        </div>
+        <div class="mb-1 d-flex flex-wrap gap-1">
+          {% for s in (f.symptom or '-').split(', ') %}
+            {% if s and s != '-' %}
+            <span class="badge" style="background:#f0f4ff;color:var(--mes-blue);border:1px solid #c5d4f5;font-size:0.73rem;white-space:normal;">{{ s }}</span>
+            {% else %}<span class="text-muted small">-</span>{% endif %}
+          {% endfor %}
+        </div>
+        <div class="d-flex justify-content-between align-items-center mt-2">
+          <small class="text-muted">
+            <i class="bi bi-person me-1"></i>{{ f.worker or '-' }}
+          </small>
+          <a href="{{ url_for('fault_detail', fault_id=f.id) }}"
+             class="btn btn-outline-primary btn-xs">
+            <i class="bi bi-search"></i> 상세
+          </a>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+    {% if not faults %}
+    <div class="text-center text-muted py-5">
+      <i class="bi bi-inbox fs-1 d-block mb-2"></i>조회된 이력이 없습니다.
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- 페이지네이션 -->
+  {% if total_pages and total_pages > 1 %}
+  <div class="col-12 d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span class="text-muted small">전체 {{ total_count }}건 · {{ page }}/{{ total_pages }} 페이지</span>
+    <nav>
+      <ul class="pagination pagination-sm mb-0">
+        <li class="page-item {% if page <= 1 %}disabled{% endif %}">
+          <a class="page-link" href="{{ page_url(page - 1) }}">이전</a>
+        </li>
+        {% for p in range(1, total_pages + 1) %}
+          {% if p == page %}
+          <li class="page-item active"><span class="page-link">{{ p }}</span></li>
+          {% elif p == 1 or p == total_pages or (p >= page - 2 and p <= page + 2) %}
+          <li class="page-item"><a class="page-link" href="{{ page_url(p) }}">{{ p }}</a></li>
+          {% elif p == page - 3 or p == page + 3 %}
+          <li class="page-item disabled"><span class="page-link">…</span></li>
+          {% endif %}
+        {% endfor %}
+        <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
+          <a class="page-link" href="{{ page_url(page + 1) }}">다음</a>
+        </li>
+      </ul>
+    </nav>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}

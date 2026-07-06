@@ -1,0 +1,79 @@
+{% extends 'base.html' %}
+{% block title %}QR 전체 출력{% endblock %}
+
+{% block content %}
+<div class="row mt-3 g-3">
+
+  <!-- 페이지 헤더 -->
+  <div class="col-12">
+    <div class="app-breadcrumb d-print-none">
+      <a href="{{ url_for('index') }}">Home</a><span class="sep">/</span>
+      <a href="{{ url_for('equipment_list') }}">설비 관리</a><span class="sep">/</span>
+      <span class="current">QR 전체 출력</span>
+    </div>
+    <div class="page-header">
+      <h1 class="page-title">
+        <i class="bi bi-qr-code" style="color:var(--mes-cyan)"></i>QR 전체 출력
+        <span class="text-muted fw-normal" style="font-size:.85rem">
+          ({{ equipments|length }}개 설비)
+        </span>
+      </h1>
+      <button onclick="window.print()" class="btn btn-dark btn-sm d-print-none">
+        <i class="bi bi-printer"></i> 인쇄
+      </button>
+    </div>
+  </div>
+
+  <!-- 섹션 필터 -->
+  <div class="col-12 d-print-none">
+    <div class="search-panel">
+      <form method="get" class="d-flex gap-2 align-items-end">
+        <div>
+          <label class="form-label">섹션 필터</label>
+          <select name="section" class="form-select form-select-sm" style="min-width:180px">
+            <option value="">전체 섹션</option>
+            {% for s in sections %}
+            <option value="{{ s }}" {% if sec == s %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="align-self-end">
+          <button class="btn btn-primary btn-sm">
+            <i class="bi bi-funnel"></i> 필터 적용
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- QR 그리드 -->
+  <div class="col-12">
+    <div class="row g-3" id="qr-grid">
+      {% for eq in equipments %}
+      <div class="col-6 col-sm-4 col-md-3 col-lg-2 text-center">
+        <div class="card p-2">
+          <img src="{{ url_for('static', filename='img/logo.jpg') }}" alt="로고"
+               style="height:24px;width:auto;object-fit:contain;margin:0 auto 4px;display:block;">
+          <div class="fw-bold small" style="color:var(--mes-navy)">{{ eq.eq_number }}</div>
+          <div class="text-muted text-truncate" style="font-size:.75rem">{{ eq.eq_name }}</div>
+          <div class="my-1">
+            <span class="badge bg-section" style="font-size:.65rem">{{ eq.section }}</span>
+          </div>
+          <img src="{{ url_for('qr_image', eq_id=eq.id) }}"
+               class="img-fluid" style="max-width:120px;margin:0 auto;display:block" alt="QR">
+          <div class="text-muted mt-1" style="font-size:0.62rem;letter-spacing:.3px">
+            QR 스캔
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+      {% if not equipments %}
+      <div class="col-12 text-center text-muted py-5">
+        <i class="bi bi-inbox fs-2 d-block mb-2"></i>등록된 설비가 없습니다.
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+{% endblock %}

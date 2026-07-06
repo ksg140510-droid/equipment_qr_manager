@@ -1,0 +1,78 @@
+{% extends 'base.html' %}
+{% block title %}설비 등록{% endblock %}
+
+{% block content %}
+<div class="row mt-3 justify-content-center">
+  <div class="col-12 col-md-8 col-lg-6">
+
+    <!-- 페이지 헤더 -->
+    <div class="app-breadcrumb">
+      <a href="{{ url_for('index') }}">Home</a><span class="sep">/</span>
+      <a href="{{ url_for('equipment_list') }}">설비 관리</a><span class="sep">/</span>
+      <span class="current">설비 등록</span>
+    </div>
+    <div class="page-header">
+      <h1 class="page-title">
+        <i class="bi bi-plus-circle" style="color:var(--mes-blue)"></i>설비 등록
+      </h1>
+      <a href="{{ url_for('equipment_list') }}" class="btn btn-outline-secondary btn-sm">
+        <i class="bi bi-arrow-left"></i> 목록
+      </a>
+    </div>
+
+    <div class="card">
+      <div class="card-header ch-blue">
+        <i class="bi bi-cpu"></i> 신규 설비 정보 입력
+      </div>
+      <div class="card-body">
+        <form method="post">
+
+          <div class="mb-3">
+            <label class="form-label">섹션 <span class="req">*</span></label>
+            <select name="section" class="form-select" required>
+              <option value="">섹션 선택</option>
+              {% for s in sections %}
+              <option value="{{ s }}">{{ s }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">설비번호 <span class="req">*</span></label>
+            <input type="text" name="eq_number" class="form-control"
+                   placeholder="예) EQ-001" required>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">설비명 <span class="req">*</span></label>
+            <input type="text" name="eq_name" class="form-control"
+                   placeholder="예) 조립 로봇 1호" required>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">설치위치</label>
+            <input type="text" name="location" class="form-control"
+                   placeholder="예) 1공장 3라인">
+          </div>
+
+          <div class="mb-4">
+            <label class="form-label">비고</label>
+            <textarea name="note" class="form-control" rows="2"
+                      placeholder="추가 메모"></textarea>
+          </div>
+
+          <div class="d-grid gap-2">
+            <button type="submit" class="btn btn-primary">
+              <i class="bi bi-save"></i> 등록 및 QR 생성
+            </button>
+            <a href="{{ url_for('equipment_list') }}" class="btn btn-outline-secondary">
+              취소
+            </a>
+          </div>
+
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

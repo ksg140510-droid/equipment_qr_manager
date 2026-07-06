@@ -1,0 +1,374 @@
+{% extends 'base.html' %}
+{% block title %}대시보드 - 설비 QR 이력관리{% endblock %}
+
+{% block content %}
+<div class="row mt-3 g-3">
+
+  <!-- 페이지 헤더 -->
+  <div class="col-12">
+    <div class="app-breadcrumb">
+      <span class="current">Home</span>
+    </div>
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">
+          <i class="bi bi-speedometer2" style="color:var(--mes-blue)"></i>대시보드
+        </h1>
+        <div class="page-subtitle">고장 현황 종합 모니터링</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 요약 KPI 카드 (클릭 시 해당 이력 조회) -->
+  <div class="col-6 col-md-3">
+    <a href="{{ url_for('fault_list') }}" class="stat-card-link">
+      <div class="card stat-card">
+        <div class="card-body">
+          <div class="stat-inner">
+            <div class="stat-ico blue"><i class="bi bi-clipboard-data"></i></div>
+            <div>
+              <div class="stat-num">{{ total }}</div>
+              <div class="stat-label">총 고장 건수</div>
+            </div>
+          </div>
+          <div class="stat-link-hint">클릭 시 전체 이력 조회 <i class="bi bi-arrow-right-short"></i></div>
+        </div>
+      </div>
+    </a>
+  </div>
+  <div class="col-6 col-md-3">
+    <a href="{{ url_for('fault_list') }}?date_from={{ week_start }}" class="stat-card-link">
+      <div class="card stat-card">
+        <div class="card-body">
+          <div class="stat-inner">
+            <div class="stat-ico amber"><i class="bi bi-calendar-week"></i></div>
+            <div>
+              <div class="stat-num">{{ this_week }}</div>
+              <div class="stat-label">금주 고장</div>
+            </div>
+          </div>
+          <div class="stat-link-hint">클릭 시 금주 이력 조회 <i class="bi bi-arrow-right-short"></i></div>
+        </div>
+      </div>
+    </a>
+  </div>
+  <div class="col-6 col-md-3">
+    <a href="{{ url_for('fault_list') }}?date_from={{ month_start }}" class="stat-card-link">
+      <div class="card stat-card">
+        <div class="card-body">
+          <div class="stat-inner">
+            <div class="stat-ico teal"><i class="bi bi-calendar-month"></i></div>
+            <div>
+              <div class="stat-num">{{ this_month }}</div>
+              <div class="stat-label">금월 고장</div>
+            </div>
+          </div>
+          <div class="stat-link-hint">클릭 시 금월 이력 조회 <i class="bi bi-arrow-right-short"></i></div>
+        </div>
+      </div>
+    </a>
+  </div>
+  <div class="col-6 col-md-3">
+    <a href="{{ url_for('fault_list') }}?grade=A" class="stat-card-link">
+      <div class="card stat-card">
+        <div class="card-body">
+          <div class="stat-inner">
+            <div class="stat-ico red"><i class="bi bi-exclamation-octagon"></i></div>
+            <div>
+              <div class="stat-num">{% for g in grade_cnt %}{% if g.grade == 'A' %}{{ g.cnt }}{% endif %}{% else %}0{% endfor %}</div>
+              <div class="stat-label">생산정지 (A)</div>
+            </div>
+          </div>
+          <div class="stat-link-hint">클릭 시 A등급 이력 조회 <i class="bi bi-arrow-right-short"></i></div>
+        </div>
+      </div>
+    </a>
+  </div>
+
+  <!-- 처리 상태 현황 + 고장 발생 추이 (일/주/월 통합) -->
+  <div class="col-12 col-lg-4">
+    <div class="card h-100">
+      <div class="card-header">
+        <i class="bi bi-activity" style="color:var(--mes-blue)"></i>처리 상태 현황
+      </div>
+      <div class="card-body d-flex flex-column justify-content-center gap-2">
+        {% set ns = namespace(mi=0, ji=0, dg=0, wa=0) %}
+        {% for s in status_cnt %}
+          {% if s.status == '미조치' %}{% set ns.mi = s.cnt %}
+          {% elif s.status == '진행중' %}{% set ns.ji = s.cnt %}
+          {% elif s.status == '대기' %}{% set ns.dg = s.cnt %}
+          {% elif s.status == '완료' %}{% set ns.wa = s.cnt %}
+          {% endif %}
+        {% endfor %}
+        <div class="row g-2">
+          <div class="col-6">
+            <a href="{{ url_for('fault_list') }}?status=미조치" class="text-decoration-none stat-card-link d-block">
+              <div class="p-2 rounded-3 text-center" style="background:#fff5f5;border:2px solid #ffcdd2">
+                <div style="font-size:1.5rem;font-weight:900;color:var(--mes-danger)">{{ ns.mi }}</div>
+                <div style="font-size:0.7rem;font-weight:700;color:var(--mes-danger)">미조치</div>
+              </div>
+            </a>
+          </div>
+          <div class="col-6">
+            <a href="{{ url_for('fault_list') }}?status=진행중" class="text-decoration-none stat-card-link d-block">
+              <div class="p-2 rounded-3 text-center" style="background:#fff8e1;border:2px solid #ffe082">
+                <div style="font-size:1.5rem;font-weight:900;color:#E65100">{{ ns.ji }}</div>
+                <div style="font-size:0.7rem;font-weight:700;color:#E65100">진행중</div>
+              </div>
+            </a>
+          </div>
+          <div class="col-6">
+            <a href="{{ url_for('fault_list') }}?status=대기" class="text-decoration-none stat-card-link d-block">
+              <div class="p-2 rounded-3 text-center" style="background:#ede7f6;border:2px solid #b39ddb">
+                <div style="font-size:1.5rem;font-weight:900;color:#6A1B9A">{{ ns.dg }}</div>
+                <div style="font-size:0.7rem;font-weight:700;color:#6A1B9A">대기</div>
+              </div>
+            </a>
+          </div>
+          <div class="col-6">
+            <a href="{{ url_for('fault_list') }}?status=완료" class="text-decoration-none stat-card-link d-block">
+              <div class="p-2 rounded-3 text-center" style="background:#e8f5e9;border:2px solid #a5d6a7">
+                <div style="font-size:1.5rem;font-weight:900;color:var(--mes-success)">{{ ns.wa }}</div>
+                <div style="font-size:0.7rem;font-weight:700;color:var(--mes-success)">완료</div>
+              </div>
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 고장 발생 추이 (일별/주별/월별 드롭다운 통합) -->
+  <div class="col-12 col-lg-8">
+    <div class="card h-100">
+      <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span><i class="bi bi-graph-up" style="color:var(--mes-blue)"></i> 고장 발생 추이</span>
+        <div class="d-flex align-items-center gap-2">
+          <select id="trendViewSelect" class="form-select form-select-sm" style="width:auto">
+            <option value="daily">일별</option>
+            <option value="weekly">주별</option>
+            <option value="monthly">월별(최근 12개월)</option>
+          </select>
+          <form method="get" style="display:inline-flex;align-items:center;" id="trendMonthForm">
+            <select name="month" id="trendMonthSelect" class="form-select form-select-sm" style="width:auto"
+                    onchange="this.form.submit()" {% if not available_months %}disabled{% endif %}>
+              {% for m in available_months %}
+              <option value="{{ m.value }}" {% if selected_month == m.value %}selected{% endif %}>{{ m.label }}</option>
+              {% endfor %}
+              {% if not available_months %}
+              <option value="">데이터 없음</option>
+              {% endif %}
+            </select>
+          </form>
+        </div>
+      </div>
+      <div class="card-body pt-2">
+        <div style="height:220px;">
+          <canvas id="trendChart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 설비별 / 증상별 TOP10 -->
+  <div class="col-12 col-md-6">
+    <div class="card h-100">
+      <div class="card-header">
+        <i class="bi bi-trophy" style="color:var(--mes-warning)"></i>설비별 고장 TOP10
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive" style="max-height:320px;overflow-y:auto;">
+          <table class="table table-hover mb-0">
+            <thead>
+              <tr>
+                <th>순위</th><th>설비번호</th><th>설비명</th><th class="text-center">건수</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for eq in top_eq %}
+              <tr>
+                <td>
+                  <span class="badge {% if loop.index <= 3 %}bg-danger{% else %}bg-secondary{% endif %}">
+                    {{ loop.index }}
+                  </span>
+                </td>
+                <td class="fw-bold" style="color:var(--mes-blue)">{{ eq.eq_number }}</td>
+                <td>{{ eq.eq_name }}</td>
+                <td class="text-center fw-bold">{{ eq.cnt }}</td>
+              </tr>
+              {% endfor %}
+              {% if not top_eq %}
+              <tr><td colspan="4" class="text-center text-muted py-4">데이터 없음</td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-md-6">
+    <div class="card h-100">
+      <div class="card-header">
+        <i class="bi bi-list-ol" style="color:var(--mes-danger)"></i>증상별 고장 TOP10
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive" style="max-height:320px;overflow-y:auto;">
+          <table class="table table-hover mb-0">
+            <thead>
+              <tr><th>순위</th><th>증상</th><th class="text-center">건수</th></tr>
+            </thead>
+            <tbody>
+              {% for s in top_symptom %}
+              <tr>
+                <td>
+                  <span class="badge {% if loop.index <= 3 %}bg-danger{% else %}bg-secondary{% endif %}">
+                    {{ loop.index }}
+                  </span>
+                </td>
+                <td>{{ s.symptom }}</td>
+                <td class="text-center fw-bold">{{ s.cnt }}</td>
+              </tr>
+              {% endfor %}
+              {% if not top_symptom %}
+              <tr><td colspan="3" class="text-center text-muted py-4">데이터 없음</td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 고장등급 / 작업자별 / 조치완료 부품 -->
+  <div class="col-12 col-md-4">
+    <div class="card h-100">
+      <div class="card-header">
+        <i class="bi bi-shield-exclamation" style="color:var(--mes-danger)"></i>고장등급 현황
+      </div>
+      <div class="card-body">
+        {% for g in grade_cnt %}
+        <a href="{{ url_for('fault_list') }}?grade={{ g.grade }}" class="text-decoration-none d-block mb-2">
+          <div class="d-flex justify-content-between align-items-center">
+            <span class="badge {% if g.grade == 'A' %}bg-grade-a{% elif g.grade == 'B' %}bg-grade-b{% elif g.grade == 'C' %}bg-grade-c{% else %}bg-grade-d{% endif %} px-2 py-1">
+              {{ g.grade }}등급
+            </span>
+            <span class="fw-bold text-muted small">{{ g.cnt }}건</span>
+            <div class="progress flex-grow-1 mx-2" style="height:8px">
+              <div class="progress-bar {% if g.grade == 'A' %}bg-danger{% elif g.grade == 'B' %}bg-warning{% elif g.grade == 'C' %}bg-success{% else %}bg-secondary{% endif %}"
+                   style="width:{{ (g.cnt / total * 100)|round|int if total > 0 else 0 }}%"></div>
+            </div>
+          </div>
+        </a>
+        {% endfor %}
+        {% if not grade_cnt %}
+        <p class="text-muted text-center small py-2">데이터 없음</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-md-4">
+    <div class="card h-100">
+      <div class="card-header">
+        <i class="bi bi-person-check" style="color:var(--mes-blue)"></i>작업자별 조치건수
+      </div>
+      <div class="card-body p-0">
+        <ul class="list-group list-group-flush" style="max-height:220px;overflow-y:auto;">
+          {% for w in top_worker %}
+          <li class="list-group-item d-flex justify-content-between align-items-center">
+            <span class="text-truncate me-2">{{ w.worker }}</span>
+            <span class="badge" style="background:rgba(21,101,192,.12);color:var(--mes-blue);border:1px solid rgba(21,101,192,.2)">{{ w.cnt }}</span>
+          </li>
+          {% endfor %}
+          {% if not top_worker %}
+          <li class="list-group-item text-muted text-center py-3 small">데이터 없음</li>
+          {% endif %}
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-md-4">
+    <div class="card h-100">
+      <div class="card-header">
+        <i class="bi bi-box-seam" style="color:var(--mes-success)"></i>조치완료 건 사용부품
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive" style="max-height:220px;overflow-y:auto;">
+          <table class="table table-hover mb-0">
+            <thead>
+              <tr><th>부품명</th><th class="text-center">수량</th><th class="text-center">건수</th></tr>
+            </thead>
+            <tbody>
+              {% for p in completed_parts %}
+              <tr>
+                <td class="fw-bold">{{ p.part_name }}</td>
+                <td class="text-center fw-bold" style="color:var(--mes-success)">{{ p.cnt }}</td>
+                <td class="text-center text-muted">{{ p.cases }}</td>
+              </tr>
+              {% endfor %}
+              {% if not completed_parts %}
+              <tr><td colspan="3" class="text-center text-muted py-4">데이터 없음</td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let trendChart = null;
+
+const TREND_DATA = {
+  daily:   {
+    labels: {{ daily_trend | map(attribute='day') | list | tojson }},
+    data:   {{ daily_trend | map(attribute='cnt') | list | tojson }},
+    color: '#2E7D32'
+  },
+  weekly: {
+    labels: {% if selected_month %}{{ weekly_trend | map(attribute='week') | list | tojson }}{% else %}{{ weekly | map(attribute='week') | list | tojson }}{% endif %},
+    data:   {% if selected_month %}{{ weekly_trend | map(attribute='cnt') | list | tojson }}{% else %}{{ weekly | map(attribute='cnt') | list | tojson }}{% endif %},
+    color: '#1565C0'
+  },
+  monthly: {
+    labels: {{ monthly | map(attribute='month') | list | tojson }},
+    data:   {{ monthly | map(attribute='cnt') | list | tojson }},
+    color: '#6A1B9A'
+  }
+};
+
+function renderTrendChart(view) {
+  const ctx = document.getElementById('trendChart');
+  if (!ctx) return;
+  const d = TREND_DATA[view];
+  if (trendChart) { trendChart.destroy(); }
+  trendChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: d.labels,
+      datasets: [{ label: '건수', data: d.data, backgroundColor: d.color, borderRadius: 4, maxBarThickness: 36 }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { beginAtZero: true, ticks: { stepSize: 1, color:'#607D8B' }, grid: { color:'#f0f3f7' } },
+        x: { ticks: { color:'#607D8B', maxRotation: 0, autoSkip: true }, grid: { display: false } }
+      }
+    }
+  });
+  document.getElementById('trendMonthForm').style.display = (view === 'monthly') ? 'none' : 'inline-flex';
+}
+
+const trendViewSelect = document.getElementById('trendViewSelect');
+trendViewSelect.addEventListener('change', function() { renderTrendChart(this.value); });
+renderTrendChart('daily');
+</script>
+{% endblock %}
