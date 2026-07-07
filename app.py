@@ -963,6 +963,8 @@ def fault_edit(fault_id):
         save_edit_photos('action_photos[]', 'action_photo_labels[]', 'action')
         db.commit()
         db.close()
+        if grade == 'A' and fault['grade'] != 'A':
+            notify_grade_a_fault(fault_id, fault['eq_number'], fault['eq_name'], symptom)
         flash('고장 이력이 수정되었습니다.', 'success')
         return redirect(url_for('fault_detail', fault_id=fault_id))
 
