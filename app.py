@@ -15,6 +15,7 @@ from datetime import datetime, date, timedelta
 from flask import (Flask, render_template, request, redirect, url_for,
                    flash, send_file, jsonify, abort, session)
 from database import get_db, init_db
+from PIL import Image
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from werkzeug.utils import secure_filename
@@ -263,6 +264,19 @@ def notify_fault_by_grade(grade, fault_id, eq_number, eq_name, symptom, status=N
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXT
+
+
+PHOTO_MAX_DIM = 1600
+PHOTO_JPEG_QUALITY = 80
+
+def save_and_compress_image(file_storage, dest_path):
+    img = Image.open(file_storage.stream)
+    img = img.convert('RGB') if img.mode != 'RGB' else img
+    w, h = img.size
+    if max(w, h) > PHOTO_MAX_DIM:
+        scale = PHOTO_MAX_DIM / max(w, h)
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+    img.save(dest_path, 'JPEG', quality=PHOTO_JPEG_QUALITY, optimize=True)
 
 
 def last_n_months(n=12):
@@ -759,9 +773,10 @@ def fault_register(eq_id):
                 if pf and pf.filename and allowed_file(pf.filename):
                     label = (labels[i] if i < len(labels) else '').strip()
                     ts = datetime.now().strftime('%Y%m%d%H%M%S%f')[:17]
-                    fn = f"p{eq_id}_{ptype}_{ts}_{i}_{secure_filename(pf.filename)}"
+                    base = os.path.splitext(secure_filename(pf.filename))[0]
+                    fn = f"p{eq_id}_{ptype}_{ts}_{i}_{base}.jpg"
                     try:
-                        pf.save(os.path.join(PHOTOS_DIR, fn))
+                        save_and_compress_image(pf, os.path.join(PHOTOS_DIR, fn))
                         db.execute(
                             "INSERT INTO fault_photos (fault_id,filename,label,photo_type) VALUES (?,?,?,?)",
                             (fault_id, fn, label, ptype)
@@ -979,9 +994,10 @@ def fault_edit(fault_id):
                 if pf and pf.filename and allowed_file(pf.filename):
                     label = (labels[i] if i < len(labels) else '').strip()
                     ts = datetime.now().strftime('%Y%m%d%H%M%S%f')[:17]
-                    fn = f"p{eq_id_edit}_{ptype}_{ts}_{i}_{secure_filename(pf.filename)}"
+                    base = os.path.splitext(secure_filename(pf.filename))[0]
+                    fn = f"p{eq_id_edit}_{ptype}_{ts}_{i}_{base}.jpg"
                     try:
-                        pf.save(os.path.join(PHOTOS_DIR, fn))
+                        save_and_compress_image(pf, os.path.join(PHOTOS_DIR, fn))
                         db.execute(
                             "INSERT INTO fault_photos (fault_id,filename,label,photo_type) VALUES (?,?,?,?)",
                             (fault_id, fn, label, ptype))
