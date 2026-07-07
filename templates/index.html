@@ -25,9 +25,9 @@
       <div>
         <i class="bi bi-chat-dots-fill me-2"></i>
         {% if kakao_connected %}
-          <strong>카카오톡 긴급알림:</strong> 연결됨 — A등급(생산정지) 고장 발생 시 카카오톡으로 알려드립니다.
+          <strong>카카오톡 고장알림:</strong> 연결됨 — A/B/C등급 고장 발생·등급변경 시 카카오톡으로 알려드립니다.
         {% else %}
-          <strong>카카오톡 긴급알림:</strong> 연결 안 됨 — A등급(생산정지) 고장 발생 시 알림을 받으려면 연결하세요.
+          <strong>카카오톡 고장알림:</strong> 연결 안 됨 — A/B/C등급 고장 발생 시 알림을 받으려면 연결하세요.
         {% endif %}
       </div>
       {% if session.get('edit_authorized') %}

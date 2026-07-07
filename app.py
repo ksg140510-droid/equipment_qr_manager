@@ -236,19 +236,29 @@ def _kakao_send_to_all(text, link_url):
         results.append((account.get('nickname'), ok, result))
     return results
 
-def notify_grade_a_fault(fault_id, eq_number, eq_name, symptom):
-    if not _kakao_connected():
+GRADE_NOTIFY_LABEL = {
+    'A': ('🚨', 'A등급 (생산정지)'),
+    'B': ('⚠️', 'B등급 (품질영향)'),
+    'C': ('🔧', 'C등급 (경미고장)'),
+}
+
+def notify_fault_by_grade(grade, fault_id, eq_number, eq_name, symptom, status=None, worker=None, action_detail=None):
+    if grade not in GRADE_NOTIFY_LABEL or not _kakao_connected():
         return
+    emoji, label = GRADE_NOTIFY_LABEL[grade]
     ip = get_local_ip()
     link_url = f'http://{ip}:5001/fault/{fault_id}'
-    text = (f'🚨 생산정지(A등급) 고장 발생\n'
+    text = (f'{emoji} {label} 고장 발생\n'
             f'설비: {eq_number} {eq_name}\n'
             f'증상: {symptom or "-"}\n'
+            f'처리상태: {status or "미조치"}\n'
+            f'작업자: {worker or "-"}\n'
+            f'조치내용: {action_detail or "-"}\n'
             f'상세보기에서 확인해주세요.')
     try:
         _kakao_send_to_all(text, link_url)
     except Exception:
-        logging.exception('notify_grade_a_fault failed')
+        logging.exception('notify_fault_by_grade failed')
 
 
 def allowed_file(filename):
@@ -580,6 +590,14 @@ def equipment_delete(eq_id):
     if not eq:
         db.close()
         abort(404)
+    fault_count = db.execute(
+        "SELECT COUNT(*) FROM fault_history WHERE equipment_id=?", (eq_id,)
+    ).fetchone()[0]
+    if fault_count > 0:
+        db.close()
+        flash(f'이 설비에는 고장이력이 {fault_count}건 있어 삭제할 수 없습니다. '
+              f'먼저 고장이력을 삭제한 후 다시 시도해주세요.', 'danger')
+        return redirect(url_for('equipment_detail', eq_id=eq_id))
     db.execute("DELETE FROM equipment WHERE id=?", (eq_id,))
     db.commit()
     db.close()
@@ -766,8 +784,7 @@ def fault_register(eq_id):
 
         db.commit()
         db.close()
-        if grade == 'A':
-            notify_grade_a_fault(fault_id, eq['eq_number'], eq['eq_name'], symptom)
+        notify_fault_by_grade(grade, fault_id, eq['eq_number'], eq['eq_name'], symptom, status, worker, action_detail)
         flash('고장이 등록되었습니다.', 'success')
         return redirect(url_for('equipment_detail', eq_id=eq_id))
 
@@ -963,8 +980,8 @@ def fault_edit(fault_id):
         save_edit_photos('action_photos[]', 'action_photo_labels[]', 'action')
         db.commit()
         db.close()
-        if grade == 'A' and fault['grade'] != 'A':
-            notify_grade_a_fault(fault_id, fault['eq_number'], fault['eq_name'], symptom)
+        if grade != fault['grade']:
+            notify_fault_by_grade(grade, fault_id, fault['eq_number'], fault['eq_name'], symptom, status, worker, action_detail)
         flash('고장 이력이 수정되었습니다.', 'success')
         return redirect(url_for('fault_detail', fault_id=fault_id))
 
