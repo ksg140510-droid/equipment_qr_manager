@@ -57,6 +57,13 @@ def _csrf_protect():
             flash('보안 토큰이 만료되었습니다. 다시 시도해주세요.', 'danger')
             return redirect(request.referrer or url_for('index'))
 
+@app.context_processor
+def _inject_actor_workers():
+    db = get_db()
+    names = get_workers(db)
+    db.close()
+    return dict(actor_workers=names)
+
 QR_DIR      = os.path.join(BASE_DIR, 'qr_codes')
 UPLOAD_DIR  = os.path.join(BASE_DIR, 'uploads')
 FAULT_DIR   = os.path.join(UPLOAD_DIR, 'fault')
@@ -320,6 +327,16 @@ def register_worker(db, name):
         db.execute("INSERT OR IGNORE INTO workers (name) VALUES (?)", (name,))
 
 
+def log_action(action, target_type, target_id, detail=None):
+    db = get_db()
+    db.execute(
+        "INSERT INTO audit_log (actor, action, target_type, target_id, detail) VALUES (?,?,?,?,?)",
+        (session.get('actor_name', '이름 미선택'), action, target_type, target_id, detail)
+    )
+    db.commit()
+    db.close()
+
+
 def get_local_ip():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -544,6 +561,9 @@ def equipment_list():
 
 @app.route('/equipment/add', methods=['GET', 'POST'])
 def equipment_add():
+    if not session.get('edit_authorized'):
+        flash('설비 등록은 관리자 인증이 필요합니다. 비밀번호를 입력해 주세요.', 'danger')
+        return redirect(url_for('equipment_list'))
     if request.method == 'POST':
         eq_number = request.form.get('eq_number', '').strip()
         eq_name   = request.form.get('eq_name', '').strip()
@@ -563,6 +583,7 @@ def equipment_add():
         eq_id = cur.lastrowid
         db.commit()
         db.close()
+        log_action('등록', '설비', eq_id, f'{eq_number} {eq_name}')
 
         host_url = request.host_url
         generate_qr(eq_id, host_url)
@@ -575,6 +596,9 @@ def equipment_add():
 
 @app.route('/equipment/edit/<int:eq_id>', methods=['GET', 'POST'])
 def equipment_edit(eq_id):
+    if not session.get('edit_authorized'):
+        flash('설비 수정은 관리자 인증이 필요합니다. 비밀번호를 입력해 주세요.', 'danger')
+        return redirect(url_for('equipment_detail', eq_id=eq_id))
     db = get_db()
     eq = db.execute("SELECT * FROM equipment WHERE id=?", (eq_id,)).fetchone()
     if not eq:
@@ -599,6 +623,7 @@ def equipment_edit(eq_id):
         )
         db.commit()
         db.close()
+        log_action('수정', '설비', eq_id, f'{eq_number} {eq_name}')
 
         host_url = request.host_url
         generate_qr(eq_id, host_url)
@@ -631,6 +656,7 @@ def equipment_delete(eq_id):
     db.execute("DELETE FROM equipment WHERE id=?", (eq_id,))
     db.commit()
     db.close()
+    log_action('삭제', '설비', eq_id, f"{eq['eq_number']} {eq['eq_name']}")
     qr_path = os.path.join(QR_DIR, f'eq_{eq_id}.png')
     if os.path.exists(qr_path):
         os.remove(qr_path)
@@ -934,9 +960,11 @@ def fault_detail(fault_id):
 @app.route('/fault/auth', methods=['POST'])
 def fault_auth():
     pw       = request.form.get('password', '').strip()
+    actor    = request.form.get('actor', '').strip()
     next_url = request.form.get('next', '/')
     if check_admin_password(pw):
         session['edit_authorized'] = True
+        session['actor_name'] = actor or '이름 미선택'
         return redirect(next_url)
     flash('비밀번호가 올바르지 않습니다.', 'danger')
     return redirect(request.referrer or url_for('fault_list'))
@@ -1028,6 +1056,8 @@ def fault_edit(fault_id):
         db.close()
         if grade != fault['grade']:
             notify_fault_by_grade(grade, fault_id, fault['eq_number'], fault['eq_name'], symptom, status, worker, action_detail)
+        log_action('수정', '고장이력', fault_id,
+                   f"{fault['eq_number']} {fault['eq_name']} / 등급 {fault['grade'] or '-'}→{grade}")
         flash('고장 이력이 수정되었습니다.', 'success')
         if photo_save_failed:
             flash('일부 사진 저장에 실패했습니다. 필요하면 다시 첨부해주세요.', 'warning')
@@ -1078,6 +1108,7 @@ def fault_delete(fault_id):
     db.execute("DELETE FROM fault_history WHERE id=?", (fault_id,))
     db.commit()
     db.close()
+    log_action('삭제', '고장이력', fault_id, f"{fault['eq_number']} {fault['eq_name']} / {fault['symptom'] or '-'}")
     flash('고장 이력이 삭제되었습니다.', 'warning')
     return redirect(url_for('equipment_detail', eq_id=eq_id))
 
@@ -1355,6 +1386,22 @@ def kakao_remove(kakao_id):
     _kakao_remove_account(kakao_id)
     flash('카카오톡 알림 대상에서 제거했습니다.', 'success')
     return redirect(url_for('index'))
+
+
+# ──────────────────────────────────────────────
+# 변경이력 (감사로그)
+# ──────────────────────────────────────────────
+@app.route('/audit-log')
+def audit_log_view():
+    if not session.get('edit_authorized'):
+        flash('변경이력 조회는 관리자 인증이 필요합니다. 비밀번호를 입력해 주세요.', 'danger')
+        return redirect(request.referrer or url_for('index'))
+    db = get_db()
+    logs = db.execute(
+        "SELECT * FROM audit_log ORDER BY id DESC LIMIT 200"
+    ).fetchall()
+    db.close()
+    return render_template('audit_log.html', logs=logs)
 
 
 # ──────────────────────────────────────────────

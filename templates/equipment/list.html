@@ -14,9 +14,15 @@
         <h1 class="page-title"><i class="bi bi-cpu" style="color:var(--mes-blue)"></i>설비 목록</h1>
         <div class="page-subtitle">총 {{ equipments|length }}개 설비 등록됨</div>
       </div>
+      {% if session.get('edit_authorized') %}
       <a href="{{ url_for('equipment_add') }}" class="btn btn-primary">
         <i class="bi bi-plus-circle"></i> 설비 등록
       </a>
+      {% else %}
+      <button type="button" class="btn btn-primary" onclick="openDeleteAuth('{{ url_for('equipment_add') }}')">
+        <i class="bi bi-plus-circle"></i> 설비 등록
+      </button>
+      {% endif %}
     </div>
   </div>
 
@@ -90,10 +96,17 @@
                   </a>
                 </td>
                 <td class="text-center">
+                  {% if session.get('edit_authorized') %}
                   <a href="{{ url_for('equipment_edit', eq_id=eq.id) }}"
                      class="btn btn-outline-warning btn-xs me-1">
                     <i class="bi bi-pencil"></i>
                   </a>
+                  {% else %}
+                  <button type="button" class="btn btn-outline-warning btn-xs me-1"
+                          onclick="openDeleteAuth('{{ url_for('equipment_edit', eq_id=eq.id) }}')">
+                    <i class="bi bi-pencil"></i>
+                  </button>
+                  {% endif %}
                   {% if session.get('edit_authorized') %}
                   <form method="post" action="{{ url_for('equipment_delete', eq_id=eq.id) }}"
                         class="d-inline"

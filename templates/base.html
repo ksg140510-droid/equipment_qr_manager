@@ -117,6 +117,15 @@
     <a class="sidebar-link" href="#" data-bs-toggle="modal" data-bs-target="#backupModal">
       <i class="bi bi-cloud-arrow-up-fill"></i><span>백업</span>
     </a>
+    {% if session.get('edit_authorized') %}
+    <a class="sidebar-link {% if request.endpoint == 'audit_log_view' %}active{% endif %}" href="{{ url_for('audit_log_view') }}">
+      <i class="bi bi-clock-history"></i><span>변경이력</span>
+    </a>
+    {% else %}
+    <a class="sidebar-link" href="#" onclick="openDeleteAuth('{{ url_for('audit_log_view') }}'); return false;">
+      <i class="bi bi-clock-history"></i><span>변경이력</span>
+    </a>
+    {% endif %}
   </nav>
   <div class="sidebar-foot">Ver. 2.0.0 · © Sinopex</div>
 </aside>
@@ -180,6 +189,15 @@
         <form method="post" action="{{ url_for('fault_auth') }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="next" id="deleteAuthNext" value="">
+          <div class="mb-3">
+            <label class="form-label">이름 <span class="text-muted fw-normal" style="font-size:.72rem">(변경 기록용)</span></label>
+            <select name="actor" class="form-select">
+              <option value="">이름 선택</option>
+              {% for w in actor_workers %}
+              <option value="{{ w }}">{{ w }}</option>
+              {% endfor %}
+            </select>
+          </div>
           <div class="mb-3">
             <label class="form-label">비밀번호</label>
             <div class="input-group">

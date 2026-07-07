@@ -74,6 +74,18 @@ def init_db():
         )
     ''')
 
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            actor TEXT,
+            action TEXT NOT NULL,
+            target_type TEXT NOT NULL,
+            target_id INTEGER,
+            detail TEXT,
+            created_at DATETIME DEFAULT (datetime('now','localtime'))
+        )
+    ''')
+
     conn.commit()
 
     # 기존 고장이력에 기록된 작업자 이름을 workers 테이블로 이관

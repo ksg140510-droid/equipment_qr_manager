@@ -1,0 +1,55 @@
+{% extends 'base.html' %}
+{% block title %}변경이력{% endblock %}
+
+{% block content %}
+<div class="row mt-3 g-3">
+
+  <div class="col-12">
+    <div class="app-breadcrumb">
+      <a href="{{ url_for('index') }}">Home</a><span class="sep">/</span>
+      <span class="current">변경이력</span>
+    </div>
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">
+          <i class="bi bi-clock-history" style="color:var(--mes-blue)"></i>변경이력
+        </h1>
+        <div class="page-subtitle">최근 삭제·수정·등록 기록 (최근 200건)</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12">
+    <div class="card">
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>시각</th><th>이름</th><th>작업</th><th>대상</th><th>내용</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for log in logs %}
+            <tr>
+              <td style="white-space:nowrap;font-size:0.85rem">{{ log.created_at }}</td>
+              <td class="fw-bold">{{ log.actor or '-' }}</td>
+              <td>
+                <span class="badge {% if log.action == '삭제' %}bg-danger{% elif log.action == '수정' %}bg-warning text-dark{% else %}bg-success{% endif %}">
+                  {{ log.action }}
+                </span>
+              </td>
+              <td>{{ log.target_type }} #{{ log.target_id }}</td>
+              <td>{{ log.detail or '-' }}</td>
+            </tr>
+            {% endfor %}
+            {% if not logs %}
+            <tr><td colspan="5" class="text-center text-muted py-5">기록이 없습니다.</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
