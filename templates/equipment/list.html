@@ -98,6 +98,7 @@
                   <form method="post" action="{{ url_for('equipment_delete', eq_id=eq.id) }}"
                         class="d-inline"
                         onsubmit="return confirm('{{ eq.eq_name }} 설비를 삭제하시겠습니까?')">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button class="btn btn-outline-danger btn-xs">
                       <i class="bi bi-trash"></i>
                     </button>

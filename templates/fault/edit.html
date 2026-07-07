@@ -50,6 +50,7 @@
       </div>
       <div class="card-body">
         <form method="post" enctype="multipart/form-data" id="editForm">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
           <!-- 발생일시 -->
           <div class="mb-3">

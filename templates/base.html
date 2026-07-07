@@ -178,6 +178,7 @@
           삭제 작업은 관리자 비밀번호가 필요합니다. 확인 후 다시 삭제 버튼을 눌러주세요.
         </p>
         <form method="post" action="{{ url_for('fault_auth') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="next" id="deleteAuthNext" value="">
           <div class="mb-3">
             <label class="form-label">비밀번호</label>
@@ -295,7 +296,7 @@ document.getElementById('backupExecBtn').addEventListener('click', function() {
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>백업 중...';
 
-  fetch('/backup', { method: 'POST' })
+  fetch('/backup', { method: 'POST', headers: { 'X-CSRFToken': '{{ csrf_token() }}' } })
     .then(r => r.json())
     .then(d => {
       const res = document.getElementById('backup-result');

@@ -41,6 +41,22 @@ def _load_or_create_secret_key():
 app.secret_key = _load_or_create_secret_key()
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 요청당 최대 50MB (사진 최대 10장 대비)
 
+# ─── CSRF 보호 (세션 기반 토큰) ──────────────────────────
+@app.context_processor
+def _inject_csrf_token():
+    if 'csrf_token' not in session:
+        session['csrf_token'] = secrets.token_hex(16)
+    return dict(csrf_token=lambda: session['csrf_token'])
+
+@app.before_request
+def _csrf_protect():
+    if request.method == 'POST':
+        token = session.get('csrf_token')
+        submitted = request.form.get('csrf_token') or request.headers.get('X-CSRFToken')
+        if not token or submitted != token:
+            flash('보안 토큰이 만료되었습니다. 다시 시도해주세요.', 'danger')
+            return redirect(request.referrer or url_for('index'))
+
 QR_DIR      = os.path.join(BASE_DIR, 'qr_codes')
 UPLOAD_DIR  = os.path.join(BASE_DIR, 'uploads')
 FAULT_DIR   = os.path.join(UPLOAD_DIR, 'fault')
