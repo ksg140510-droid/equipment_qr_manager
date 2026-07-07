@@ -750,7 +750,9 @@ def fault_register(eq_id):
         fault_id = cur.lastrowid
 
         # 고장 사진 저장 (최대 5장)
+        photo_save_failed = False
         def save_photos(files_key, labels_key, ptype):
+            nonlocal photo_save_failed
             files  = request.files.getlist(files_key)
             labels = request.form.getlist(labels_key)
             for i, pf in enumerate(files[:5]):
@@ -758,11 +760,15 @@ def fault_register(eq_id):
                     label = (labels[i] if i < len(labels) else '').strip()
                     ts = datetime.now().strftime('%Y%m%d%H%M%S%f')[:17]
                     fn = f"p{eq_id}_{ptype}_{ts}_{i}_{secure_filename(pf.filename)}"
-                    pf.save(os.path.join(PHOTOS_DIR, fn))
-                    db.execute(
-                        "INSERT INTO fault_photos (fault_id,filename,label,photo_type) VALUES (?,?,?,?)",
-                        (fault_id, fn, label, ptype)
-                    )
+                    try:
+                        pf.save(os.path.join(PHOTOS_DIR, fn))
+                        db.execute(
+                            "INSERT INTO fault_photos (fault_id,filename,label,photo_type) VALUES (?,?,?,?)",
+                            (fault_id, fn, label, ptype)
+                        )
+                    except Exception:
+                        logging.exception('photo save failed: %s', fn)
+                        photo_save_failed = True
 
         save_photos('fault_photos[]', 'fault_photo_labels[]', 'fault')
         save_photos('action_photos[]', 'action_photo_labels[]', 'action')
@@ -786,6 +792,8 @@ def fault_register(eq_id):
         db.close()
         notify_fault_by_grade(grade, fault_id, eq['eq_number'], eq['eq_name'], symptom, status, worker, action_detail)
         flash('고장이 등록되었습니다.', 'success')
+        if photo_save_failed:
+            flash('일부 사진 저장에 실패했습니다. 필요하면 수정 화면에서 다시 첨부해주세요.', 'warning')
         return redirect(url_for('equipment_detail', eq_id=eq_id))
 
     workers = get_workers(db)
@@ -957,7 +965,9 @@ def fault_edit(fault_id):
 
         # 새 사진 추가 (고장/완료 각 타입별 최대 5장)
         eq_id_edit = fault['equipment_id']
+        photo_save_failed = False
         def save_edit_photos(files_key, labels_key, ptype):
+            nonlocal photo_save_failed
             files  = request.files.getlist(files_key)
             labels = request.form.getlist(labels_key)
             exist = db.execute(
@@ -970,11 +980,15 @@ def fault_edit(fault_id):
                     label = (labels[i] if i < len(labels) else '').strip()
                     ts = datetime.now().strftime('%Y%m%d%H%M%S%f')[:17]
                     fn = f"p{eq_id_edit}_{ptype}_{ts}_{i}_{secure_filename(pf.filename)}"
-                    pf.save(os.path.join(PHOTOS_DIR, fn))
-                    db.execute(
-                        "INSERT INTO fault_photos (fault_id,filename,label,photo_type) VALUES (?,?,?,?)",
-                        (fault_id, fn, label, ptype))
-                    exist += 1
+                    try:
+                        pf.save(os.path.join(PHOTOS_DIR, fn))
+                        db.execute(
+                            "INSERT INTO fault_photos (fault_id,filename,label,photo_type) VALUES (?,?,?,?)",
+                            (fault_id, fn, label, ptype))
+                        exist += 1
+                    except Exception:
+                        logging.exception('photo save failed: %s', fn)
+                        photo_save_failed = True
 
         save_edit_photos('fault_photos[]', 'fault_photo_labels[]', 'fault')
         save_edit_photos('action_photos[]', 'action_photo_labels[]', 'action')
@@ -983,6 +997,8 @@ def fault_edit(fault_id):
         if grade != fault['grade']:
             notify_fault_by_grade(grade, fault_id, fault['eq_number'], fault['eq_name'], symptom, status, worker, action_detail)
         flash('고장 이력이 수정되었습니다.', 'success')
+        if photo_save_failed:
+            flash('일부 사진 저장에 실패했습니다. 필요하면 다시 첨부해주세요.', 'warning')
         return redirect(url_for('fault_detail', fault_id=fault_id))
 
     parts         = db.execute("SELECT * FROM used_parts WHERE fault_id=?", (fault_id,)).fetchall()
@@ -1318,6 +1334,19 @@ def uploaded_file(subfolder, filename):
     return send_file(os.path.join(folder, filename))
 
 
+# ──────────────────────────────────────────────
+# 에러 페이지
+# ──────────────────────────────────────────────
+@app.errorhandler(404)
+def not_found_error(e):
+    return render_template('errors/404.html'), 404
+
+@app.errorhandler(500)
+def internal_error(e):
+    logging.exception('unhandled server error')
+    return render_template('errors/500.html'), 500
+
+
 if __name__ == '__main__':
     init_db()
     ip = get_local_ip()
@@ -1327,4 +1356,9 @@ if __name__ == '__main__':
     print(f"  로컬 접속 : http://127.0.0.1:{port}")
     print(f"  네트워크  : http://{ip}:{port}")
     print(f"{'='*50}\n")
-    app.run(host='0.0.0.0', port=port, debug=False)
+    try:
+        from waitress import serve
+        serve(app, host='0.0.0.0', port=port, threads=8)
+    except ImportError:
+        logging.warning('waitress가 설치되어 있지 않아 Flask 개발 서버로 대신 실행합니다. (pip install waitress 권장)')
+        app.run(host='0.0.0.0', port=port, debug=False)
