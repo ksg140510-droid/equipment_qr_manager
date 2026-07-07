@@ -221,12 +221,15 @@
           <input type="hidden" name="next" id="deleteAuthNext" value="">
           <div class="mb-3">
             <label class="form-label">이름 <span class="text-muted fw-normal" style="font-size:.72rem">(변경 기록용)</span></label>
-            <select name="actor" class="form-select">
+            <select name="actor" class="form-select modal-actor-select">
               <option value="">이름 선택</option>
               {% for w in actor_workers %}
               <option value="{{ w }}">{{ w }}</option>
               {% endfor %}
+              <option value="__new__">+ 새 이름 입력</option>
             </select>
+            <input type="text" name="actor_custom" class="form-control mt-2 modal-actor-custom"
+                   placeholder="이름을 입력하세요" style="display:none" maxlength="30" autocomplete="off">
           </div>
           <div class="mb-3">
             <label class="form-label">비밀번호</label>
@@ -314,6 +317,17 @@ function openDeleteAuth(nextUrl) {
   document.getElementById('deleteAuthNext').value = nextUrl;
   new bootstrap.Modal(document.getElementById('deleteAuthModal')).show();
 }
+
+/* 이름 select 에 "+ 새 이름 입력" 옵션 처리 (여러 모달 공용, 이벤트 위임) */
+document.addEventListener('change', function(e) {
+  if (!e.target.classList.contains('modal-actor-select')) return;
+  const custom = e.target.parentElement.querySelector('.modal-actor-custom');
+  if (!custom) return;
+  const isNew = e.target.value === '__new__';
+  custom.style.display = isNew ? 'block' : 'none';
+  custom.required = isNew;
+  if (isNew) custom.focus(); else custom.value = '';
+});
 
 /* 사이드바 접기 상태 기억 */
 (function() {

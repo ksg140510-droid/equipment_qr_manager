@@ -38,12 +38,15 @@
       <input type="hidden" name="next" value="{{ next }}">
       <div class="mb-3">
         <label class="form-label">이름</label>
-        <select name="actor" class="form-select" required>
+        <select name="actor" id="login-actor-select" class="form-select" required>
           <option value="">이름 선택</option>
           {% for w in workers %}
           <option value="{{ w }}">{{ w }}</option>
           {% endfor %}
+          <option value="__new__">+ 새 이름 입력</option>
         </select>
+        <input type="text" name="actor_custom" id="login-actor-custom" class="form-control mt-2"
+               placeholder="이름을 입력하세요" style="display:none" maxlength="30" autocomplete="off">
       </div>
       <div class="mb-4">
         <label class="form-label">비밀번호</label>
@@ -57,5 +60,15 @@
       </div>
     </form>
   </div>
+<script>
+  const actorSelect = document.getElementById('login-actor-select');
+  const actorCustom = document.getElementById('login-actor-custom');
+  actorSelect.addEventListener('change', function() {
+    const isNew = this.value === '__new__';
+    actorCustom.style.display = isNew ? 'block' : 'none';
+    actorCustom.required = isNew;
+    if (isNew) actorCustom.focus(); else actorCustom.value = '';
+  });
+</script>
 </body>
 </html>

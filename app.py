@@ -970,10 +970,17 @@ def fault_detail(fault_id):
 # ──────────────────────────────────────────────
 @app.route('/fault/auth', methods=['POST'])
 def fault_auth():
-    pw       = request.form.get('password', '').strip()
-    actor    = request.form.get('actor', '').strip()
+    pw           = request.form.get('password', '').strip()
+    actor_sel    = request.form.get('actor', '').strip()
+    actor_custom = request.form.get('actor_custom', '').strip()
+    actor        = actor_custom if actor_sel == '__new__' else actor_sel
     next_url = request.form.get('next', '/')
     if check_admin_password(pw):
+        if actor:
+            db = get_db()
+            register_worker(db, actor)
+            db.commit()
+            db.close()
         session.permanent = True
         session['edit_authorized'] = True
         session['actor_name'] = actor or '이름 미선택'
@@ -986,9 +993,16 @@ def fault_auth():
 def login():
     next_url = request.values.get('next') or url_for('index')
     if request.method == 'POST':
-        pw    = request.form.get('password', '').strip()
-        actor = request.form.get('actor', '').strip()
+        pw           = request.form.get('password', '').strip()
+        actor_sel    = request.form.get('actor', '').strip()
+        actor_custom = request.form.get('actor_custom', '').strip()
+        actor        = actor_custom if actor_sel == '__new__' else actor_sel
         if check_admin_password(pw):
+            if actor:
+                db = get_db()
+                register_worker(db, actor)
+                db.commit()
+                db.close()
             session.permanent = True
             session['edit_authorized'] = True
             session['actor_name'] = actor or '이름 미선택'
