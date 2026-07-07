@@ -30,9 +30,16 @@
           <strong>카카오톡 긴급알림:</strong> 연결 안 됨 — A등급(생산정지) 고장 발생 시 알림을 받으려면 연결하세요.
         {% endif %}
       </div>
+      {% if session.get('edit_authorized') %}
       <a href="{{ url_for('kakao_login') }}" class="btn btn-sm {{ 'btn-outline-success' if kakao_connected else 'btn-warning' }}">
         <i class="bi bi-link-45deg me-1"></i>{{ '다른 사람 추가' if kakao_connected else '지금 연결하기' }}
       </a>
+      {% else %}
+      <button type="button" class="btn btn-sm {{ 'btn-outline-success' if kakao_connected else 'btn-warning' }}"
+              onclick="openDeleteAuth('{{ url_for('kakao_login') }}')">
+        <i class="bi bi-link-45deg me-1"></i>{{ '다른 사람 추가' if kakao_connected else '지금 연결하기' }}
+      </button>
+      {% endif %}
     </div>
     {% if kakao_accounts %}
     <div class="d-flex flex-wrap gap-2 mt-2">
