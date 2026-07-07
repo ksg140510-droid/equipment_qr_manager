@@ -21,37 +21,56 @@
 
   <!-- 카카오톡 알림 연동 상태 -->
   <div class="col-12">
-    <div class="alert {{ 'alert-success' if kakao_connected else 'alert-warning' }} d-flex align-items-center justify-content-between mb-0 flex-wrap gap-2">
-      <div>
-        <i class="bi bi-chat-dots-fill me-2"></i>
-        {% if kakao_connected %}
-          <strong>카카오톡 고장알림:</strong> 연결됨 — A/B/C등급 고장 발생·등급변경 시 카카오톡으로 알려드립니다.
+    {% if kakao_connected %}
+    <div class="d-flex align-items-center gap-2 flex-wrap py-1 px-3 rounded-3" style="background:#e8f5e9;font-size:0.82rem">
+      <i class="bi bi-check-circle-fill text-success"></i>
+      <span class="text-success fw-bold">카카오 고장알림 연결됨</span>
+      <span class="text-muted">({{ kakao_accounts|length }}명)</span>
+      <button class="btn btn-sm btn-link p-0 ms-1 text-decoration-none" type="button"
+              data-bs-toggle="collapse" data-bs-target="#kakaoDetail" style="font-size:0.78rem">
+        관리 <i class="bi bi-chevron-down"></i>
+      </button>
+    </div>
+    <div class="collapse mt-2" id="kakaoDetail">
+      <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+        <span class="text-muted small">A/B/C등급 고장 발생·등급변경 시 카카오톡으로 알려드립니다.</span>
+        {% if session.get('edit_authorized') %}
+        <a href="{{ url_for('kakao_login') }}" class="btn btn-sm btn-outline-success">
+          <i class="bi bi-link-45deg me-1"></i>다른 사람 추가
+        </a>
         {% else %}
-          <strong>카카오톡 고장알림:</strong> 연결 안 됨 — A/B/C등급 고장 발생 시 알림을 받으려면 연결하세요.
+        <button type="button" class="btn btn-sm btn-outline-success" onclick="openDeleteAuth('{{ url_for('kakao_login') }}')">
+          <i class="bi bi-link-45deg me-1"></i>다른 사람 추가
+        </button>
         {% endif %}
       </div>
+      <div class="d-flex flex-wrap gap-2">
+        {% for acc in kakao_accounts %}
+        <form method="post" action="{{ url_for('kakao_remove', kakao_id=acc.kakao_id) }}" class="d-inline"
+              onsubmit="return confirm('{{ acc.nickname }}님을 알림 대상에서 제거하시겠습니까?')">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-person-check me-1"></i>{{ acc.nickname }} <i class="bi bi-x-circle ms-1"></i>
+          </button>
+        </form>
+        {% endfor %}
+      </div>
+    </div>
+    {% else %}
+    <div class="alert alert-warning d-flex align-items-center justify-content-between mb-0 flex-wrap gap-2">
+      <div>
+        <i class="bi bi-chat-dots-fill me-2"></i>
+        <strong>카카오톡 고장알림:</strong> 연결 안 됨 — A/B/C등급 고장 발생 시 알림을 받으려면 연결하세요.
+      </div>
       {% if session.get('edit_authorized') %}
-      <a href="{{ url_for('kakao_login') }}" class="btn btn-sm {{ 'btn-outline-success' if kakao_connected else 'btn-warning' }}">
-        <i class="bi bi-link-45deg me-1"></i>{{ '다른 사람 추가' if kakao_connected else '지금 연결하기' }}
+      <a href="{{ url_for('kakao_login') }}" class="btn btn-sm btn-warning">
+        <i class="bi bi-link-45deg me-1"></i>지금 연결하기
       </a>
       {% else %}
-      <button type="button" class="btn btn-sm {{ 'btn-outline-success' if kakao_connected else 'btn-warning' }}"
-              onclick="openDeleteAuth('{{ url_for('kakao_login') }}')">
-        <i class="bi bi-link-45deg me-1"></i>{{ '다른 사람 추가' if kakao_connected else '지금 연결하기' }}
+      <button type="button" class="btn btn-sm btn-warning" onclick="openDeleteAuth('{{ url_for('kakao_login') }}')">
+        <i class="bi bi-link-45deg me-1"></i>지금 연결하기
       </button>
       {% endif %}
-    </div>
-    {% if kakao_accounts %}
-    <div class="d-flex flex-wrap gap-2 mt-2">
-      {% for acc in kakao_accounts %}
-      <form method="post" action="{{ url_for('kakao_remove', kakao_id=acc.kakao_id) }}" class="d-inline"
-            onsubmit="return confirm('{{ acc.nickname }}님을 알림 대상에서 제거하시겠습니까?')">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn btn-sm btn-outline-secondary">
-          <i class="bi bi-person-check me-1"></i>{{ acc.nickname }} <i class="bi bi-x-circle ms-1"></i>
-        </button>
-      </form>
-      {% endfor %}
     </div>
     {% endif %}
   </div>

@@ -25,7 +25,14 @@
         <span class="brand-sub">SINOPEX MES</span>
       </span>
     </a>
-    <button class="btn btn-link ms-auto me-1" data-bs-toggle="modal" data-bs-target="#backupModal"
+    {% if session.get('edit_authorized') %}
+    <a href="{{ url_for('logout') }}" class="d-flex align-items-center ms-auto me-1 text-decoration-none"
+       style="color:#a5d6a7;font-size:0.78rem;font-weight:700;max-width:96px">
+      <i class="bi bi-person-check-fill me-1"></i>
+      <span class="text-truncate">{{ session.get('actor_name') }}</span>
+    </a>
+    {% endif %}
+    <button class="btn btn-link {% if not session.get('edit_authorized') %}ms-auto{% endif %} me-1" data-bs-toggle="modal" data-bs-target="#backupModal"
             style="border:1.5px solid rgba(79,195,247,.5);border-radius:8px;padding:.35rem .7rem;line-height:1">
       <i class="bi bi-cloud-arrow-up-fill" style="color:#4fc3f7;font-size:1.2rem"></i>
       <span class="d-none d-sm-inline ms-1" style="color:#4fc3f7;font-size:0.85rem;font-weight:600">백업</span>

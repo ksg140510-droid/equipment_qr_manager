@@ -40,6 +40,7 @@ def _load_or_create_secret_key():
 
 app.secret_key = _load_or_create_secret_key()
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 요청당 최대 50MB (사진 최대 10장 대비)
+app.permanent_session_lifetime = timedelta(minutes=60)
 
 # ─── CSRF 보호 (세션 기반 토큰) ──────────────────────────
 @app.context_processor
@@ -973,6 +974,7 @@ def fault_auth():
     actor    = request.form.get('actor', '').strip()
     next_url = request.form.get('next', '/')
     if check_admin_password(pw):
+        session.permanent = True
         session['edit_authorized'] = True
         session['actor_name'] = actor or '이름 미선택'
         return redirect(next_url)
@@ -987,6 +989,7 @@ def login():
         pw    = request.form.get('password', '').strip()
         actor = request.form.get('actor', '').strip()
         if check_admin_password(pw):
+            session.permanent = True
             session['edit_authorized'] = True
             session['actor_name'] = actor or '이름 미선택'
             return redirect(next_url)
