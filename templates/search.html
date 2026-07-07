@@ -1,0 +1,98 @@
+{% extends 'base.html' %}
+{% block title %}통합검색 - "{{ q }}"{% endblock %}
+
+{% block content %}
+<div class="row mt-3 g-3">
+
+  <div class="col-12">
+    <div class="app-breadcrumb">
+      <a href="{{ url_for('index') }}">Home</a><span class="sep">/</span>
+      <span class="current">통합검색</span>
+    </div>
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">
+          <i class="bi bi-search" style="color:var(--mes-blue)"></i>통합검색
+        </h1>
+        <div class="page-subtitle">
+          {% if q %}"{{ q }}" 검색 결과 — 설비 {{ equipments|length }}건, 고장이력 {{ faults|length }}건{% else %}검색어를 입력하세요{% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-cpu" style="color:var(--mes-blue)"></i>설비 ({{ equipments|length }})
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr><th>설비번호</th><th>설비명</th><th>섹션</th><th>위치</th><th class="text-center">상세</th></tr>
+          </thead>
+          <tbody>
+            {% for eq in equipments %}
+            <tr>
+              <td class="fw-bold" style="color:var(--mes-blue)">{{ eq.eq_number }}</td>
+              <td>{{ eq.eq_name }}</td>
+              <td><span class="badge bg-section">{{ eq.section }}</span></td>
+              <td class="text-muted">{{ eq.location or '-' }}</td>
+              <td class="text-center">
+                <a href="{{ url_for('equipment_detail', eq_id=eq.id) }}" class="btn btn-outline-primary btn-xs">
+                  <i class="bi bi-search"></i>
+                </a>
+              </td>
+            </tr>
+            {% endfor %}
+            {% if q and not equipments %}
+            <tr><td colspan="5" class="text-center text-muted py-4">일치하는 설비가 없습니다.</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-exclamation-triangle" style="color:var(--mes-danger)"></i>고장이력 (최근 {{ faults|length }}건)
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>설비번호</th><th>설비명</th><th>발생일시</th><th>증상</th><th>작업자</th><th>상태</th><th class="text-center">상세</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for f in faults %}
+            {% set fstatus = f.status or '미조치' %}
+            <tr>
+              <td class="fw-bold" style="color:var(--mes-blue);white-space:nowrap">{{ f.eq_number }}</td>
+              <td style="white-space:nowrap">{{ f.eq_name }}</td>
+              <td style="white-space:nowrap;font-size:0.83rem">{{ f.occurred_at[:16] }}</td>
+              <td><div style="max-width:280px;white-space:normal;">{{ f.symptom or '-' }}</div></td>
+              <td>{{ f.worker or '-' }}</td>
+              <td>
+                <span class="badge badge-status badge-status-{{ fstatus }}">{{ fstatus }}</span>
+              </td>
+              <td class="text-center">
+                <a href="{{ url_for('fault_detail', fault_id=f.id) }}" class="btn btn-outline-primary btn-xs">
+                  <i class="bi bi-search"></i>
+                </a>
+              </td>
+            </tr>
+            {% endfor %}
+            {% if q and not faults %}
+            <tr><td colspan="7" class="text-center text-muted py-4">일치하는 고장이력이 없습니다.</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

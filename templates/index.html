@@ -19,6 +19,35 @@
     </div>
   </div>
 
+  <!-- 카카오톡 알림 연동 상태 -->
+  <div class="col-12">
+    <div class="alert {{ 'alert-success' if kakao_connected else 'alert-warning' }} d-flex align-items-center justify-content-between mb-0 flex-wrap gap-2">
+      <div>
+        <i class="bi bi-chat-dots-fill me-2"></i>
+        {% if kakao_connected %}
+          <strong>카카오톡 긴급알림:</strong> 연결됨 — A등급(생산정지) 고장 발생 시 카카오톡으로 알려드립니다.
+        {% else %}
+          <strong>카카오톡 긴급알림:</strong> 연결 안 됨 — A등급(생산정지) 고장 발생 시 알림을 받으려면 연결하세요.
+        {% endif %}
+      </div>
+      <a href="{{ url_for('kakao_login') }}" class="btn btn-sm {{ 'btn-outline-success' if kakao_connected else 'btn-warning' }}">
+        <i class="bi bi-link-45deg me-1"></i>{{ '다른 사람 추가' if kakao_connected else '지금 연결하기' }}
+      </a>
+    </div>
+    {% if kakao_accounts %}
+    <div class="d-flex flex-wrap gap-2 mt-2">
+      {% for acc in kakao_accounts %}
+      <form method="post" action="{{ url_for('kakao_remove', kakao_id=acc.kakao_id) }}" class="d-inline"
+            onsubmit="return confirm('{{ acc.nickname }}님을 알림 대상에서 제거하시겠습니까?')">
+        <button type="submit" class="btn btn-sm btn-outline-secondary">
+          <i class="bi bi-person-check me-1"></i>{{ acc.nickname }} <i class="bi bi-x-circle ms-1"></i>
+        </button>
+      </form>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+
   <!-- 요약 KPI 카드 (클릭 시 해당 이력 조회) -->
   <div class="col-6 col-md-3">
     <a href="{{ url_for('fault_list') }}" class="stat-card-link">

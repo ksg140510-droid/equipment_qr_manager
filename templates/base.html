@@ -129,10 +129,10 @@
     <button type="button" class="header-toggle-btn" onclick="document.body.classList.toggle('sidebar-collapsed')">
       <i class="bi bi-list"></i>
     </button>
-    <form class="header-search" method="get" action="{{ url_for('equipment_list') }}">
+    <form class="header-search" method="get" action="{{ url_for('global_search') }}">
       <div class="header-search-wrap">
         <i class="bi bi-search"></i>
-        <input type="text" name="q" placeholder="설비명, 설비번호, 위치 검색" autocomplete="off">
+        <input type="text" name="q" placeholder="설비, 고장이력 통합검색 (설비명/번호/증상/작업자)" autocomplete="off">
       </div>
     </form>
     <div class="header-actions">

@@ -5,6 +5,7 @@ __pycache__/
 equipment_qr.db
 secret_key.txt
 admin_config.json
+kakao_config.json
 backup_log.json
 
 # 업로드/생성 파일 (재생성 가능 또는 개별 백업으로 관리)

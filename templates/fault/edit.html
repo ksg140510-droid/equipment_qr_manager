@@ -228,15 +228,21 @@
           <!-- 작업자 (기존 목록 선택 또는 신규 입력) -->
           <div class="mb-3">
             <label class="form-label">작업자</label>
-            <input type="text" name="worker" class="form-control"
-                   list="workerList" placeholder="작업자 이름 선택 또는 직접 입력" autocomplete="off"
-                   value="{{ fault.worker or '' }}">
-            <datalist id="workerList">
+            <select name="worker_select" id="worker-select" class="form-select">
+              <option value="">작업자 선택</option>
               {% for w in workers %}
-              <option value="{{ w }}">
+              <option value="{{ w }}" {% if w == fault.worker %}selected{% endif %}>{{ w }}</option>
               {% endfor %}
-            </datalist>
-            <div class="form-text" style="font-size:0.72rem">목록에 없으면 새 이름을 입력하면 자동으로 추가됩니다.</div>
+              {% if fault.worker and fault.worker not in workers %}
+              <option value="{{ fault.worker }}" selected>{{ fault.worker }} (기존)</option>
+              {% endif %}
+              <option value="__new__">+ 새 작업자 추가</option>
+            </select>
+            <input type="text" name="worker_custom" id="worker-custom" class="form-control mt-1"
+                   placeholder="새 작업자 이름 입력" style="display:none" maxlength="30" autocomplete="off">
+            <div class="form-text" style="font-size:0.72rem">
+              같은 사람은 항상 같은 이름으로 선택해야 통계가 정확합니다.
+            </div>
           </div>
 
           <!-- 완료일 -->
@@ -335,6 +341,7 @@
                             style="display:none;min-width:36px"><i class="bi bi-x"></i></button>
                   </div>
                 </div>
+                <img class="photo-preview mt-2 rounded border" style="display:none;max-height:100px;max-width:140px;object-fit:cover">
               </div>
             </div>
             <button type="button" class="add-photo-btn btn btn-outline-secondary btn-sm mt-1"
@@ -369,6 +376,7 @@
                             style="display:none;min-width:36px"><i class="bi bi-x"></i></button>
                   </div>
                 </div>
+                <img class="photo-preview mt-2 rounded border" style="display:none;max-height:100px;max-width:140px;object-fit:cover">
               </div>
             </div>
             <button type="button" class="add-photo-btn btn btn-outline-secondary btn-sm mt-1"
@@ -397,6 +405,15 @@
 
 {% block scripts %}
 <script>
+/* 작업자 신규 직접입력 */
+const workerSelect = document.getElementById('worker-select');
+const workerCustom = document.getElementById('worker-custom');
+workerSelect.addEventListener('change', function() {
+  const isNew = this.value === '__new__';
+  workerCustom.style.display = isNew ? 'block' : 'none';
+  if (isNew) workerCustom.focus(); else workerCustom.value = '';
+});
+
 /* D등급 기타 내용 */
 document.querySelectorAll('input[name="grade"]').forEach(function(radio) {
   radio.addEventListener('change', function() {
@@ -492,6 +509,24 @@ document.querySelectorAll('.add-photo-btn').forEach(function(btn) {
     });
   });
 });
+
+/* 사진 미리보기 (선택 즉시 썸네일 표시) */
+function bindPhotoPreview(containerId) {
+  document.getElementById(containerId).addEventListener('change', function(e) {
+    if (!e.target.matches('input[type="file"]')) return;
+    const preview = e.target.closest('.photo-item').querySelector('.photo-preview');
+    const file = e.target.files && e.target.files[0];
+    if (!file) { preview.style.display = 'none'; preview.src = ''; return; }
+    const reader = new FileReader();
+    reader.onload = function(ev) {
+      preview.src = ev.target.result;
+      preview.style.display = 'block';
+    };
+    reader.readAsDataURL(file);
+  });
+}
+bindPhotoPreview('fault-photo-container');
+bindPhotoPreview('action-photo-container');
 
 /* 폼 제출 */
 document.getElementById('editForm').addEventListener('submit', function(e) {

@@ -1,11 +1,15 @@
 import os
 import io
 import json
+import time
 import shutil
 import socket
 import secrets
+import logging
 import calendar
 import qrcode
+import urllib.request
+import urllib.error
 from urllib.parse import urlencode
 from datetime import datetime, date, timedelta
 from flask import (Flask, render_template, request, redirect, url_for,
@@ -81,6 +85,172 @@ def check_admin_password(pw):
     return check_password_hash(_load_admin_password_hash(), pw or '')
 
 
+# ─── 카카오톡 알림 연동 (A등급 고장 발생 시) ──────────────────
+KAKAO_CONFIG_PATH   = os.path.join(BASE_DIR, 'kakao_config.json')
+KAKAO_AUTHORIZE_URL = 'https://kauth.kakao.com/oauth/authorize'
+KAKAO_TOKEN_URL     = 'https://kauth.kakao.com/oauth/token'
+KAKAO_SEND_URL      = 'https://kapi.kakao.com/v2/api/talk/memo/default/send'
+KAKAO_USER_ME_URL   = 'https://kapi.kakao.com/v2/user/me'
+
+def _kakao_load():
+    try:
+        with open(KAKAO_CONFIG_PATH, encoding='utf-8') as f:
+            cfg = json.load(f)
+    except Exception:
+        cfg = {}
+    cfg.setdefault('accounts', [])
+    return cfg
+
+def _kakao_save(cfg):
+    with open(KAKAO_CONFIG_PATH, 'w', encoding='utf-8') as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+def _kakao_connected():
+    return bool(_kakao_load().get('accounts'))
+
+def _kakao_authorize_url():
+    cfg = _kakao_load()
+    params = {
+        'client_id': cfg.get('rest_api_key', ''),
+        'redirect_uri': cfg.get('redirect_uri', ''),
+        'response_type': 'code',
+        'scope': 'talk_message',
+    }
+    return KAKAO_AUTHORIZE_URL + '?' + urlencode(params)
+
+def _kakao_post_form(url, data, headers=None):
+    body = urlencode(data).encode('utf-8')
+    req = urllib.request.Request(url, data=body, method='POST')
+    req.add_header('Content-Type', 'application/x-www-form-urlencoded;charset=utf-8')
+    for k, v in (headers or {}).items():
+        req.add_header(k, v)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode('utf-8'))
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read().decode('utf-8'))
+        except Exception:
+            return {'error': f'http_{e.code}'}
+
+def _kakao_get_profile(access_token):
+    req = urllib.request.Request(KAKAO_USER_ME_URL, method='GET')
+    req.add_header('Authorization', f'Bearer {access_token}')
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+        kakao_id = str(data.get('id', ''))
+        nickname = (data.get('properties') or {}).get('nickname', '') or f'사용자 {kakao_id[-4:]}'
+        return kakao_id, nickname
+    except Exception:
+        logging.exception('kakao profile fetch failed')
+        return None, None
+
+def _kakao_exchange_code(code):
+    cfg = _kakao_load()
+    data = {
+        'grant_type': 'authorization_code',
+        'client_id': cfg.get('rest_api_key', ''),
+        'redirect_uri': cfg.get('redirect_uri', ''),
+        'code': code,
+    }
+    if cfg.get('client_secret'):
+        data['client_secret'] = cfg['client_secret']
+    result = _kakao_post_form(KAKAO_TOKEN_URL, data)
+    if 'access_token' not in result:
+        return result, None
+
+    kakao_id, nickname = _kakao_get_profile(result['access_token'])
+    account = {
+        'kakao_id': kakao_id or f'user_{int(time.time())}',
+        'nickname': nickname or '이름 없음',
+        'access_token': result['access_token'],
+        'refresh_token': result.get('refresh_token'),
+        'token_expires_at': time.time() + result.get('expires_in', 21599) - 60,
+    }
+    accounts = [a for a in cfg['accounts'] if a.get('kakao_id') != account['kakao_id']]
+    accounts.append(account)
+    cfg['accounts'] = accounts
+    _kakao_save(cfg)
+    return result, account
+
+def _kakao_refresh_account(account):
+    cfg = _kakao_load()
+    if not account.get('refresh_token'):
+        return None
+    data = {
+        'grant_type': 'refresh_token',
+        'client_id': cfg.get('rest_api_key', ''),
+        'refresh_token': account['refresh_token'],
+    }
+    if cfg.get('client_secret'):
+        data['client_secret'] = cfg['client_secret']
+    result = _kakao_post_form(KAKAO_TOKEN_URL, data)
+    if 'access_token' not in result:
+        logging.warning('kakao refresh failed for %s: %s', account.get('nickname'), result)
+        return None
+    account['access_token'] = result['access_token']
+    if 'refresh_token' in result:
+        account['refresh_token'] = result['refresh_token']
+    account['token_expires_at'] = time.time() + result.get('expires_in', 21599) - 60
+    for i, a in enumerate(cfg['accounts']):
+        if a.get('kakao_id') == account.get('kakao_id'):
+            cfg['accounts'][i] = account
+    _kakao_save(cfg)
+    return account['access_token']
+
+def _kakao_valid_token_for(account):
+    if time.time() >= (account.get('token_expires_at') or 0):
+        return _kakao_refresh_account(account)
+    return account.get('access_token')
+
+def _kakao_remove_account(kakao_id):
+    cfg = _kakao_load()
+    cfg['accounts'] = [a for a in cfg['accounts'] if a.get('kakao_id') != kakao_id]
+    _kakao_save(cfg)
+
+def _kakao_send_to_account(account, text, link_url):
+    token = _kakao_valid_token_for(account)
+    if not token:
+        return False, '토큰 갱신 실패'
+    template = {
+        'object_type': 'text',
+        'text': text,
+        'link': {'web_url': link_url, 'mobile_web_url': link_url},
+    }
+    result = _kakao_post_form(
+        KAKAO_SEND_URL,
+        {'template_object': json.dumps(template, ensure_ascii=False)},
+        headers={'Authorization': f'Bearer {token}'}
+    )
+    if result.get('result_code') == 0:
+        return True, result
+    logging.warning('kakao send failed for %s: %s', account.get('nickname'), result)
+    return False, result
+
+def _kakao_send_to_all(text, link_url):
+    cfg = _kakao_load()
+    results = []
+    for account in cfg.get('accounts', []):
+        ok, result = _kakao_send_to_account(account, text, link_url)
+        results.append((account.get('nickname'), ok, result))
+    return results
+
+def notify_grade_a_fault(fault_id, eq_number, eq_name, symptom):
+    if not _kakao_connected():
+        return
+    ip = get_local_ip()
+    link_url = f'http://{ip}:5001/fault/{fault_id}'
+    text = (f'🚨 생산정지(A등급) 고장 발생\n'
+            f'설비: {eq_number} {eq_name}\n'
+            f'증상: {symptom or "-"}\n'
+            f'상세보기에서 확인해주세요.')
+    try:
+        _kakao_send_to_all(text, link_url)
+    except Exception:
+        logging.exception('notify_grade_a_fault failed')
+
+
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXT
 
@@ -135,7 +305,7 @@ def parse_occurred_at(raw):
 def generate_qr(eq_id, host_url=None):
     # 항상 LAN IP 사용 — 모바일(휴대폰)에서도 스캔 가능하도록
     ip = get_local_ip()
-    url = f"http://{ip}:5001/equipment/{eq_id}"
+    url = f"http://{ip}:5001/fault/register/{eq_id}"
     qr = qrcode.QRCode(version=1, box_size=10, border=4,
                         error_correction=qrcode.constants.ERROR_CORRECT_H)
     qr.add_data(url)
@@ -281,7 +451,32 @@ def index():
         daily_trend=daily_trend, weekly_trend=weekly_trend,
         eq_chart=eq_chart, symptom_chart=symptom_chart,
         parts_chart=parts_chart,
-        week_start=week_start, month_start=month_start)
+        week_start=week_start, month_start=month_start,
+        kakao_connected=_kakao_connected(), kakao_accounts=_kakao_load().get('accounts', []))
+
+
+# ──────────────────────────────────────────────
+# 통합검색 (설비 + 고장이력)
+# ──────────────────────────────────────────────
+@app.route('/search')
+def global_search():
+    q = request.args.get('q', '').strip()
+    equipments, faults = [], []
+    if q:
+        db = get_db()
+        like = f'%{q}%'
+        equipments = db.execute("""
+            SELECT * FROM equipment
+            WHERE eq_number LIKE ? OR eq_name LIKE ? OR location LIKE ? OR section LIKE ?
+            ORDER BY section, eq_number
+        """, [like, like, like, like]).fetchall()
+        faults = db.execute("""
+            SELECT * FROM fault_history
+            WHERE eq_number LIKE ? OR eq_name LIKE ? OR symptom LIKE ? OR worker LIKE ? OR cause LIKE ?
+            ORDER BY occurred_at DESC LIMIT 50
+        """, [like, like, like, like, like]).fetchall()
+        db.close()
+    return render_template('search.html', q=q, equipments=equipments, faults=faults)
 
 
 # ──────────────────────────────────────────────
@@ -514,7 +709,9 @@ def fault_register(eq_id):
         symptom      = ', '.join([s for s in symptom_list if s])
         cause        = request.form.get('cause', '').strip()
         action_detail= request.form.get('action_detail', '').strip()
-        worker       = request.form.get('worker', '').strip()
+        worker_sel   = request.form.get('worker_select', '').strip()
+        worker_custom= request.form.get('worker_custom', '').strip()
+        worker       = worker_custom if worker_sel == '__new__' else worker_sel
         completed_at = request.form.get('completed_at', '').strip() or None
         grade        = request.form.get('grade', '').strip()
         grade_note   = request.form.get('grade_note', '').strip() if grade == 'D' else None
@@ -522,7 +719,8 @@ def fault_register(eq_id):
         status_note  = request.form.get('status_note', '').strip() if status == '대기' else None
         occurred_at  = parse_occurred_at(request.form.get('occurred_at', ''))
 
-        register_worker(db, worker)
+        if worker:
+            register_worker(db, worker)
 
         cur = db.execute("""
             INSERT INTO fault_history
@@ -568,6 +766,8 @@ def fault_register(eq_id):
 
         db.commit()
         db.close()
+        if grade == 'A':
+            notify_grade_a_fault(fault_id, eq['eq_number'], eq['eq_name'], symptom)
         flash('고장이 등록되었습니다.', 'success')
         return redirect(url_for('equipment_detail', eq_id=eq_id))
 
@@ -706,7 +906,9 @@ def fault_edit(fault_id):
         symptom      = ', '.join([s for s in symptom_list if s])
         cause        = request.form.get('cause', '').strip()
         action_detail= request.form.get('action_detail', '').strip()
-        worker       = request.form.get('worker', '').strip()
+        worker_sel   = request.form.get('worker_select', '').strip()
+        worker_custom= request.form.get('worker_custom', '').strip()
+        worker       = worker_custom if worker_sel == '__new__' else worker_sel
         completed_at = request.form.get('completed_at', '').strip() or None
         grade        = request.form.get('grade', '').strip()
         grade_note   = request.form.get('grade_note', '').strip() if grade == 'D' else None
@@ -714,7 +916,8 @@ def fault_edit(fault_id):
         status_note  = request.form.get('status_note', '').strip() if status == '대기' else None
         occurred_at  = parse_occurred_at(request.form.get('occurred_at', ''))
 
-        register_worker(db, worker)
+        if worker:
+            register_worker(db, worker)
 
         # 기존 사진 삭제 요청 처리
         delete_ids = request.form.getlist('delete_photo[]')
@@ -1041,6 +1244,50 @@ def do_backup():
         return jsonify({'ok': True, 'last': ts})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+# ──────────────────────────────────────────────
+# 카카오톡 알림 연동
+# ──────────────────────────────────────────────
+@app.route('/kakao/login')
+def kakao_login():
+    if not session.get('edit_authorized'):
+        flash('카카오 연동은 관리자 인증이 필요합니다. 비밀번호를 입력해 주세요.', 'danger')
+        return redirect(request.referrer or url_for('index'))
+    cfg = _kakao_load()
+    if not cfg.get('rest_api_key'):
+        flash('카카오 REST API 키가 설정되지 않았습니다.', 'danger')
+        return redirect(url_for('index'))
+    return redirect(_kakao_authorize_url())
+
+@app.route('/kakao/callback')
+def kakao_callback():
+    error = request.args.get('error')
+    code  = request.args.get('code')
+    if error or not code:
+        flash('카카오 인증 실패: ' + (error or '인증 코드 없음'), 'danger')
+        return redirect(url_for('index'))
+    result, account = _kakao_exchange_code(code)
+    logging.info('kakao_exchange result: %s', result)
+    if account:
+        flash(f'✅ {account["nickname"]}님, 카카오톡 알림 연동이 완료됐습니다.', 'success')
+        try:
+            ip = get_local_ip()
+            _kakao_send_to_account(account, '✅ 설비 QR 이력관리 시스템 카카오톡 알림이 연결되었습니다.', f'http://{ip}:5001/')
+        except Exception:
+            logging.exception('kakao welcome message failed')
+    else:
+        flash('카카오 토큰 발급 실패: ' + str(result.get('error_description', result)), 'danger')
+    return redirect(url_for('index'))
+
+@app.route('/kakao/remove/<kakao_id>', methods=['POST'])
+def kakao_remove(kakao_id):
+    if not session.get('edit_authorized'):
+        flash('삭제 권한이 없습니다. 비밀번호를 입력해 주세요.', 'danger')
+        return redirect(request.referrer or url_for('index'))
+    _kakao_remove_account(kakao_id)
+    flash('카카오톡 알림 대상에서 제거했습니다.', 'success')
+    return redirect(url_for('index'))
 
 
 # ──────────────────────────────────────────────

@@ -41,6 +41,11 @@
             <div>{{ eq.location or '-' }}</div>
           </div>
         </div>
+        <div class="mt-2">
+          <a href="{{ url_for('equipment_detail', eq_id=eq.id) }}" class="small">
+            <i class="bi bi-clock-history me-1"></i>이 설비의 고장 이력·상세정보 보기
+          </a>
+        </div>
       </div>
     </div>
 
@@ -156,17 +161,21 @@
             </button>
           </div>
 
-          <!-- 작업자 (기존 목록 선택 또는 신규 입력) -->
+          <!-- 작업자 (기존 목록 선택 또는 신규 입력, 이름 통일을 위해 select 방식 사용) -->
           <div class="mb-3">
             <label class="form-label">작업자</label>
-            <input type="text" name="worker" class="form-control"
-                   list="workerList" placeholder="작업자 이름 선택 또는 직접 입력" autocomplete="off">
-            <datalist id="workerList">
+            <select name="worker_select" id="worker-select" class="form-select">
+              <option value="">작업자 선택</option>
               {% for w in workers %}
-              <option value="{{ w }}">
+              <option value="{{ w }}">{{ w }}</option>
               {% endfor %}
-            </datalist>
-            <div class="form-text" style="font-size:0.72rem">목록에 없으면 새 이름을 입력하면 자동으로 추가됩니다.</div>
+              <option value="__new__">+ 새 작업자 추가</option>
+            </select>
+            <input type="text" name="worker_custom" id="worker-custom" class="form-control mt-1"
+                   placeholder="새 작업자 이름 입력" style="display:none" maxlength="30" autocomplete="off">
+            <div class="form-text" style="font-size:0.72rem">
+              같은 사람은 항상 같은 이름으로 선택해야 통계가 정확합니다. 목록에 없을 때만 "새 작업자 추가"를 사용하세요.
+            </div>
           </div>
 
           <!-- 처리상태 -->
@@ -229,6 +238,7 @@
                     </button>
                   </div>
                 </div>
+                <img class="photo-preview mt-2 rounded border" style="display:none;max-height:100px;max-width:140px;object-fit:cover">
               </div>
             </div>
             <button type="button" class="add-photo-btn btn btn-outline-secondary btn-sm mt-1"
@@ -267,6 +277,7 @@
                     </button>
                   </div>
                 </div>
+                <img class="photo-preview mt-2 rounded border" style="display:none;max-height:100px;max-width:140px;object-fit:cover">
               </div>
             </div>
             <button type="button" class="add-photo-btn btn btn-outline-secondary btn-sm mt-1"
@@ -315,6 +326,15 @@ document.querySelectorAll('input[name="status"]').forEach(function(radio) {
     if (this.value !== '대기') document.getElementById('status-note-text').value = '';
     if (this.value === '대기') document.getElementById('status-note-text').focus();
   });
+});
+
+/* 작업자 신규 직접입력 */
+const workerSelect = document.getElementById('worker-select');
+const workerCustom = document.getElementById('worker-custom');
+workerSelect.addEventListener('change', function() {
+  const isNew = this.value === '__new__';
+  workerCustom.style.display = isNew ? 'block' : 'none';
+  if (isNew) workerCustom.focus(); else workerCustom.value = '';
 });
 
 /* 증상 기타 직접입력 */
@@ -398,6 +418,24 @@ document.querySelectorAll('.add-photo-btn').forEach(function(btn) {
     });
   });
 });
+
+/* 사진 미리보기 (선택 즉시 썸네일 표시) */
+function bindPhotoPreview(containerId) {
+  document.getElementById(containerId).addEventListener('change', function(e) {
+    if (!e.target.matches('input[type="file"]')) return;
+    const preview = e.target.closest('.photo-item').querySelector('.photo-preview');
+    const file = e.target.files && e.target.files[0];
+    if (!file) { preview.style.display = 'none'; preview.src = ''; return; }
+    const reader = new FileReader();
+    reader.onload = function(ev) {
+      preview.src = ev.target.result;
+      preview.style.display = 'block';
+    };
+    reader.readAsDataURL(file);
+  });
+}
+bindPhotoPreview('fault-photo-container');
+bindPhotoPreview('action-photo-container');
 
 /* 폼 제출 전처리 & 검증 */
 document.getElementById('faultForm').addEventListener('submit', function(e) {
