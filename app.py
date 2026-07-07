@@ -64,6 +64,16 @@ def _inject_actor_workers():
     db.close()
     return dict(actor_workers=names)
 
+# ─── 로그인 벽 (QR 고장등록 경로는 예외) ─────────────────
+LOGIN_EXEMPT_ENDPOINTS = {'login', 'static', 'fault_register', 'fault_select', 'kakao_callback'}
+
+@app.before_request
+def _require_login():
+    if request.endpoint is None or request.endpoint in LOGIN_EXEMPT_ENDPOINTS:
+        return
+    if not session.get('edit_authorized'):
+        return redirect(url_for('login', next=request.full_path.rstrip('?')))
+
 QR_DIR      = os.path.join(BASE_DIR, 'qr_codes')
 UPLOAD_DIR  = os.path.join(BASE_DIR, 'uploads')
 FAULT_DIR   = os.path.join(UPLOAD_DIR, 'fault')
@@ -968,6 +978,32 @@ def fault_auth():
         return redirect(next_url)
     flash('비밀번호가 올바르지 않습니다.', 'danger')
     return redirect(request.referrer or url_for('fault_list'))
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    next_url = request.values.get('next') or url_for('index')
+    if request.method == 'POST':
+        pw    = request.form.get('password', '').strip()
+        actor = request.form.get('actor', '').strip()
+        if check_admin_password(pw):
+            session['edit_authorized'] = True
+            session['actor_name'] = actor or '이름 미선택'
+            return redirect(next_url)
+        flash('비밀번호가 올바르지 않습니다.', 'danger')
+        return redirect(url_for('login', next=next_url))
+    db = get_db()
+    workers = get_workers(db)
+    db.close()
+    return render_template('login.html', workers=workers, next=next_url)
+
+
+@app.route('/logout')
+def logout():
+    session.pop('edit_authorized', None)
+    session.pop('actor_name', None)
+    flash('로그아웃되었습니다.', 'success')
+    return redirect(url_for('login'))
 
 
 # ──────────────────────────────────────────────
