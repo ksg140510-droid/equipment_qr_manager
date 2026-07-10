@@ -6,9 +6,15 @@ equipment_qr.db
 secret_key.txt
 admin_config.json
 kakao_config.json
+kakao_encrypt.key
 backup_log.json
+server.log
+service_stdout.log
+service_stderr.log
+login_attempts.json
 
 # 업로드/생성 파일 (재생성 가능 또는 개별 백업으로 관리)
 uploads/
 qr_codes/
 equipment_qr_manager_backup/
+db_backups/

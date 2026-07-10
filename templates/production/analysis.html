@@ -1,0 +1,116 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import empty_row %}
+{% block title %}섹션별 가동률 분석{% endblock %}
+
+{% block content %}
+<div class="row mt-3 g-3">
+
+  <!-- 페이지 헤더 -->
+  <div class="col-12">
+    <div class="app-breadcrumb">
+      <a href="{{ url_for('index') }}">Home</a><span class="sep">/</span>
+      <a href="{{ url_for('production_list') }}">생산 LOT 관리</a><span class="sep">/</span>
+      <span class="current">섹션별 가동률 분석</span>
+    </div>
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">
+          <i class="bi bi-speedometer2" style="color:var(--mes-blue)"></i>섹션별 가동률 분석
+        </h1>
+        <div class="page-subtitle">전체 LOT을 가로질러 섹션별로 집계 — 진행중인 구간도 실시간 반영</div>
+      </div>
+      <a href="{{ url_for('production_analysis_export') }}" class="btn btn-outline-success btn-sm">
+        <i class="bi bi-file-earmark-excel"></i> 엑셀 리포트
+      </a>
+    </div>
+  </div>
+
+  <!-- 섹션별 요약 -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-bar-chart" style="color:var(--mes-blue)"></i>섹션별 요약
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>섹션</th>
+              <th class="text-center">가동구간수</th>
+              <th class="text-center">평균가동률</th>
+              <th class="text-center">총고장시간</th>
+              <th class="text-center">총고장건수</th>
+              <th class="text-center">총정지시간(다운타임)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in summary %}
+            <tr>
+              <td><span class="badge bg-section">{{ row.section }}</span></td>
+              <td class="text-center fw-bold">{{ row.lot_section_count }}</td>
+              <td class="text-center fw-bold">
+                {% if row.avg_uptime_rate is not none %}
+                <span class="{% if row.avg_uptime_rate >= 95 %}text-success{% elif row.avg_uptime_rate >= 85 %}text-warning{% else %}text-danger{% endif %}">
+                  {{ '%.1f'|format(row.avg_uptime_rate) }}%
+                </span>
+                {% else %}
+                <span class="text-muted">-</span>
+                {% endif %}
+              </td>
+              <td class="text-center">{{ row.total_fault_minutes }}분</td>
+              <td class="text-center">{{ row.total_fault_count }}건</td>
+              <td class="text-center">{{ row.total_downtime_minutes }}분</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- 섹션별 상세 (LOT별 가동구간) -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-list-ul" style="color:var(--mes-muted)"></i>섹션별 상세 (LOT별 가동구간)
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>섹션</th><th>모델명</th><th>LOT번호</th><th>상태</th>
+              <th>시작</th><th>종료</th><th class="text-center">가동률</th><th class="text-center">고장건수</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in detail_rows %}
+            <tr>
+              <td style="white-space:nowrap"><span class="badge bg-section">{{ row.section }}</span></td>
+              <td class="fw-bold" style="white-space:nowrap">{{ row.model_name }}</td>
+              <td style="white-space:nowrap">{{ row.lot_number }}</td>
+              <td style="white-space:nowrap">
+                <span class="badge {% if row.status == '진행중' %}bg-success{% elif row.status == '일시정지' %}bg-warning text-dark{% elif row.status == '완료' %}bg-secondary{% else %}bg-light text-dark border{% endif %}">
+                  {{ row.status }}
+                </span>
+              </td>
+              <td style="white-space:nowrap;font-size:0.85rem">{{ row.started_at }}</td>
+              <td style="white-space:nowrap;font-size:0.85rem">{{ row.ended_at or '(진행중)' }}</td>
+              <td class="text-center fw-bold" style="white-space:nowrap">
+                <span class="{% if row.uptime_rate >= 95 %}text-success{% elif row.uptime_rate >= 85 %}text-warning{% else %}text-danger{% endif %}">
+                  {{ '%.1f'|format(row.uptime_rate) }}%
+                </span>
+              </td>
+              <td class="text-center" style="white-space:nowrap">{{ row.fault_count }}건</td>
+            </tr>
+            {% endfor %}
+            {% if not detail_rows %}
+            {{ empty_row(8, '분석할 가동 데이터가 없습니다.', icon='bi-speedometer2', hint='LOT을 등록하고 섹션 가동을 시작해 보세요.') }}
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

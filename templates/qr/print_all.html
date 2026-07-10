@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% from '_macros.html' import empty_block %}
 {% block title %}QR 전체 출력{% endblock %}
 
 {% block content %}
@@ -68,8 +69,8 @@
       </div>
       {% endfor %}
       {% if not equipments %}
-      <div class="col-12 text-center text-muted py-5">
-        <i class="bi bi-inbox fs-2 d-block mb-2"></i>등록된 설비가 없습니다.
+      <div class="col-12">
+        {{ empty_block('등록된 설비가 없습니다.', icon='bi-cpu', hint='설비를 추가하면 QR 코드가 여기에 표시됩니다.') }}
       </div>
       {% endif %}
     </div>

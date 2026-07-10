@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% from '_macros.html' import empty_row %}
 {% block title %}통합검색 - "{{ q }}"{% endblock %}
 
 {% block content %}
@@ -86,7 +87,7 @@
             </tr>
             {% endfor %}
             {% if q and not faults %}
-            <tr><td colspan="7" class="text-center text-muted py-4">일치하는 고장이력이 없습니다.</td></tr>
+            {{ empty_row(7, '일치하는 고장이력이 없습니다.', icon='bi-search', hint='다른 검색어로 시도해 보세요.', py='py-4') }}
             {% endif %}
           </tbody>
         </table>

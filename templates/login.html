@@ -3,6 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+<meta name="theme-color" content="#0d2137">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='icon-192.png') }}">
 <title>로그인 - 설비 QR 이력관리</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
@@ -38,19 +42,25 @@
       <input type="hidden" name="next" value="{{ next }}">
       <div class="mb-3">
         <label class="form-label">이름</label>
-        <select name="actor" id="login-actor-select" class="form-select" required>
-          <option value="">이름 선택</option>
-          {% for w in workers %}
-          <option value="{{ w }}">{{ w }}</option>
-          {% endfor %}
-          <option value="__new__">+ 새 이름 입력</option>
-        </select>
+        <div class="d-flex gap-2">
+          <select name="actor" id="login-actor-select" class="form-select" required>
+            <option value="">이름 선택</option>
+            {% for w in workers %}
+            <option value="{{ w }}">{{ w }}</option>
+            {% endfor %}
+            <option value="__new__">+ 새 이름 입력</option>
+          </select>
+          <button type="button" id="login-actor-delete" class="btn btn-outline-danger" title="선택한 이름 삭제" style="display:none">
+            <i class="bi bi-trash3"></i>
+          </button>
+        </div>
         <input type="text" name="actor_custom" id="login-actor-custom" class="form-control mt-2"
                placeholder="이름을 입력하세요" style="display:none" maxlength="30" autocomplete="off">
+        <div class="form-text">이름을 삭제하려면 비밀번호를 입력한 뒤 휴지통 아이콘을 누르세요.</div>
       </div>
       <div class="mb-4">
         <label class="form-label">비밀번호</label>
-        <input type="password" name="password" class="form-control" placeholder="비밀번호 입력"
+        <input type="password" name="password" id="login-password" class="form-control" placeholder="비밀번호 입력"
                autofocus autocomplete="current-password" required>
       </div>
       <div class="d-grid">
@@ -63,12 +73,58 @@
 <script>
   const actorSelect = document.getElementById('login-actor-select');
   const actorCustom = document.getElementById('login-actor-custom');
+  const actorDelete = document.getElementById('login-actor-delete');
+  const passwordInput = document.getElementById('login-password');
+
+  function refreshDeleteBtn() {
+    const v = actorSelect.value;
+    actorDelete.style.display = (v && v !== '__new__') ? 'inline-block' : 'none';
+  }
+
   actorSelect.addEventListener('change', function() {
     const isNew = this.value === '__new__';
     actorCustom.style.display = isNew ? 'block' : 'none';
     actorCustom.required = isNew;
     if (isNew) actorCustom.focus(); else actorCustom.value = '';
+    refreshDeleteBtn();
   });
+  refreshDeleteBtn();
+
+  actorDelete.addEventListener('click', function() {
+    const name = actorSelect.value;
+    if (!name || name === '__new__') return;
+    const pw = passwordInput.value.trim();
+    if (!pw) {
+      alert('이름을 삭제하려면 먼저 비밀번호를 입력하세요.');
+      passwordInput.focus();
+      return;
+    }
+    if (!confirm("'" + name + "' 이름을 목록에서 삭제하시겠습니까?")) return;
+
+    const fd = new FormData();
+    fd.append('name', name);
+    fd.append('password', pw);
+    fd.append('csrf_token', '{{ csrf_token() }}');
+
+    fetch('{{ url_for("worker_delete") }}', { method: 'POST', body: fd })
+      .then(r => r.json().then(d => ({ status: r.status, body: d })))
+      .then(({ status, body }) => {
+        if (status === 200 && body.ok) {
+          actorSelect.querySelector('option[value="' + CSS.escape(name) + '"]').remove();
+          actorSelect.value = '';
+          refreshDeleteBtn();
+        } else {
+          alert(body.error || '삭제에 실패했습니다.');
+        }
+      })
+      .catch(() => alert('삭제 요청 중 오류가 발생했습니다.'));
+  });
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function() {
+      navigator.serviceWorker.register('/sw.js').catch(function() {});
+    });
+  }
 </script>
 </body>
 </html>

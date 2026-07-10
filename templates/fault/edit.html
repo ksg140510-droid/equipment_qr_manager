@@ -246,11 +246,11 @@
             </div>
           </div>
 
-          <!-- 완료일 -->
+          <!-- 완료일시 -->
           <div class="mb-3">
-            <label class="form-label">완료일</label>
-            <input type="date" name="completed_at" class="form-control"
-                   value="{{ fault.completed_at or '' }}">
+            <label class="form-label">완료일시</label>
+            <input type="datetime-local" name="completed_at" class="form-control"
+                   value="{{ completed_at_val }}">
           </div>
 
           <!-- 기존 고장 사진 -->

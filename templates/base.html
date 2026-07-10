@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+<meta name="theme-color" content="#0d2137">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='icon-192.png') }}">
 <title>{% block title %}설비 QR 이력관리{% endblock %}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -63,6 +66,11 @@
             <i class="bi bi-exclamation-triangle"></i> 고장이력
           </a>
         </li>
+        <li class="nav-item">
+          <a class="nav-link {% if 'production' in request.endpoint %}active{% endif %}" href="{{ url_for('production_list') }}">
+            <i class="bi bi-boxes"></i> 생산LOT
+          </a>
+        </li>
         <li class="nav-item dropdown">
           <a class="nav-link dropdown-toggle {% if 'analysis' in request.endpoint %}active{% endif %}" href="#" data-bs-toggle="dropdown">
             <i class="bi bi-bar-chart-line"></i> 분석
@@ -94,54 +102,63 @@
 <!-- ══════ 데스크톱 사이드바 (lg 이상) ══════ -->
 <aside class="app-sidebar d-none d-lg-flex">
   <div class="sidebar-brand">
-    <img src="{{ url_for('static', filename='img/logo.jpg') }}" alt="로고">
+    <img src="{{ url_for('static', filename='img/logo.jpg') }}" alt="로고" class="sidebar-brand-logo-full">
+    <img src="{{ url_for('static', filename='icon-192.png') }}" alt="로고" class="sidebar-brand-logo-icon">
     <div class="sidebar-brand-text">
       <div class="b1">설비 QR 이력관리</div>
       <div class="b2">Sinopex MES</div>
     </div>
   </div>
   <nav class="sidebar-nav">
-    <a class="sidebar-link {% if request.endpoint == 'index' %}active{% endif %}" href="{{ url_for('index') }}">
+    <a class="sidebar-link {% if request.endpoint == 'index' %}active{% endif %}" href="{{ url_for('index') }}" title="대시보드">
       <i class="bi bi-speedometer2"></i><span>대시보드</span>
     </a>
 
     <div class="sidebar-section">설비</div>
-    <a class="sidebar-link {% if 'equipment' in request.endpoint %}active{% endif %}" href="{{ url_for('equipment_list') }}">
+    <a class="sidebar-link {% if 'equipment' in request.endpoint %}active{% endif %}" href="{{ url_for('equipment_list') }}" title="설비 목록">
       <i class="bi bi-cpu"></i><span>설비 목록</span>
     </a>
-    <a class="sidebar-link {% if request.endpoint == 'qr_all' %}active{% endif %}" href="{{ url_for('qr_all') }}">
+    <a class="sidebar-link {% if request.endpoint == 'qr_all' %}active{% endif %}" href="{{ url_for('qr_all') }}" title="QR 코드 전체 인쇄">
       <i class="bi bi-qr-code"></i><span>QR 코드 전체 인쇄</span>
     </a>
 
     <div class="sidebar-section">고장 관리</div>
-    <a class="sidebar-link {% if request.endpoint == 'fault_select' %}active{% endif %}" href="{{ url_for('fault_select') }}">
+    <a class="sidebar-link {% if request.endpoint == 'fault_select' %}active{% endif %}" href="{{ url_for('fault_select') }}" title="고장 등록">
       <i class="bi bi-plus-circle-fill"></i><span>고장 등록</span>
     </a>
-    <a class="sidebar-link {% if request.endpoint in ['fault_list','fault_detail'] %}active{% endif %}" href="{{ url_for('fault_list') }}">
+    <a class="sidebar-link {% if request.endpoint in ['fault_list','fault_detail'] %}active{% endif %}" href="{{ url_for('fault_list') }}" title="고장 이력">
       <i class="bi bi-exclamation-triangle"></i><span>고장 이력</span>
     </a>
 
+    <div class="sidebar-section">생산관리</div>
+    <a class="sidebar-link {% if 'production' in request.endpoint %}active{% endif %}" href="{{ url_for('production_list') }}" title="생산 LOT / 가동률">
+      <i class="bi bi-boxes"></i><span>생산 LOT / 가동률</span>
+    </a>
+
     <div class="sidebar-section">분석</div>
-    <a class="sidebar-link {% if request.endpoint == 'analysis_repeat' %}active{% endif %}" href="{{ url_for('analysis_repeat') }}">
+    <a class="sidebar-link {% if request.endpoint == 'analysis_repeat' %}active{% endif %}" href="{{ url_for('analysis_repeat') }}" title="반복고장 분석">
       <i class="bi bi-arrow-repeat"></i><span>반복고장 분석</span>
     </a>
-    <a class="sidebar-link {% if request.endpoint == 'analysis_trend' %}active{% endif %}" href="{{ url_for('analysis_trend') }}">
+    <a class="sidebar-link {% if request.endpoint == 'analysis_trend' %}active{% endif %}" href="{{ url_for('analysis_trend') }}" title="추이 분석">
       <i class="bi bi-graph-up"></i><span>추이 분석</span>
     </a>
 
     <div class="sidebar-section">데이터</div>
-    <a class="sidebar-link" href="{{ url_for('export_excel') }}">
+    <a class="sidebar-link" href="{{ url_for('export_excel') }}" title="엑셀 내보내기">
       <i class="bi bi-file-earmark-excel"></i><span>엑셀 내보내기</span>
     </a>
-    <a class="sidebar-link" href="#" data-bs-toggle="modal" data-bs-target="#backupModal">
+    <a class="sidebar-link" href="#" data-bs-toggle="modal" data-bs-target="#backupModal" title="백업">
       <i class="bi bi-cloud-arrow-up-fill"></i><span>백업</span>
     </a>
     {% if session.get('edit_authorized') %}
-    <a class="sidebar-link {% if request.endpoint == 'audit_log_view' %}active{% endif %}" href="{{ url_for('audit_log_view') }}">
+    <a class="sidebar-link {% if request.endpoint == 'audit_log_view' %}active{% endif %}" href="{{ url_for('audit_log_view') }}" title="변경이력">
       <i class="bi bi-clock-history"></i><span>변경이력</span>
     </a>
+    <a class="sidebar-link" href="#" data-bs-toggle="modal" data-bs-target="#passwordChangeModal" title="비밀번호 변경">
+      <i class="bi bi-key-fill"></i><span>비밀번호 변경</span>
+    </a>
     {% else %}
-    <a class="sidebar-link" href="#" onclick="openDeleteAuth('{{ url_for('audit_log_view') }}'); return false;">
+    <a class="sidebar-link" href="#" onclick="openDeleteAuth('{{ url_for('audit_log_view') }}'); return false;" title="변경이력">
       <i class="bi bi-clock-history"></i><span>변경이력</span>
     </a>
     {% endif %}
@@ -154,7 +171,7 @@
 
   <!-- 상단 헤더 (lg 이상) -->
   <header class="app-header d-none d-lg-flex">
-    <button type="button" class="header-toggle-btn" onclick="document.body.classList.toggle('sidebar-collapsed')">
+    <button type="button" class="header-toggle-btn" title="메뉴 축소/펼치기" onclick="document.body.classList.toggle('sidebar-collapsed')">
       <i class="bi bi-list"></i>
     </button>
     <form class="header-search" method="get" action="{{ url_for('global_search') }}">
@@ -283,6 +300,43 @@
   </div>
 </div>
 
+<!-- 비밀번호 변경 모달 -->
+<div class="modal fade" id="passwordChangeModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered" style="max-width:380px">
+    <div class="modal-content" style="border-radius:14px;overflow:hidden;border:none">
+      <div class="modal-header" style="background:var(--mes-navy);color:#fff;border:none;padding:1rem 1.3rem">
+        <h6 class="modal-title mb-0">
+          <i class="bi bi-key-fill me-2" style="color:var(--mes-cyan)"></i>비밀번호 변경
+        </h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-4">
+        <form method="post" action="{{ url_for('change_admin_password') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="next" value="{{ request.full_path }}">
+          <div class="mb-3">
+            <label class="form-label">현재 비밀번호</label>
+            <input type="password" name="current_password" class="form-control" autocomplete="current-password" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">새 비밀번호</label>
+            <input type="password" name="new_password" class="form-control" autocomplete="new-password" minlength="4" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">새 비밀번호 확인</label>
+            <input type="password" name="new_password_confirm" class="form-control" autocomplete="new-password" minlength="4" required>
+          </div>
+          <div class="d-grid">
+            <button type="submit" class="btn btn-primary" style="min-height:52px;font-size:1rem">
+              <i class="bi bi-check-circle-fill me-1"></i> 변경
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- 하단 퀵메뉴 (모바일) -->
 <div class="mobile-bottom-nav d-lg-none">
   <a href="{{ url_for('index') }}"
@@ -330,9 +384,11 @@ document.addEventListener('change', function(e) {
   if (isNew) custom.focus(); else custom.value = '';
 });
 
-/* 사이드바 접기 상태 기억 */
+/* 사이드바 접기 상태 기억 (주소 끝에 ?reset_ui=1을 붙여서 접속하면 개발자도구 없이 초기화 가능) */
 (function() {
-  if (localStorage.getItem('sidebarCollapsed') === '1') {
+  if (new URLSearchParams(location.search).get('reset_ui') === '1') {
+    localStorage.removeItem('sidebarCollapsed');
+  } else if (localStorage.getItem('sidebarCollapsed') === '1') {
     document.body.classList.add('sidebar-collapsed');
   }
   document.addEventListener('click', function(e) {
@@ -385,6 +441,12 @@ document.getElementById('backupExecBtn').addEventListener('click', function() {
       btn.disabled = false;
     });
 });
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function() {
+    navigator.serviceWorker.register('/sw.js').catch(function() {});
+  });
+}
 </script>
 </body>
 </html>

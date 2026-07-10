@@ -1,0 +1,207 @@
+{% extends 'base.html' %}
+{% block title %}{{ lot.model_name }} / {{ lot.lot_number }} - LOT 상세{% endblock %}
+
+{% block content %}
+<div class="row mt-3 g-3">
+
+  <div class="col-12">
+    <div class="app-breadcrumb">
+      <a href="{{ url_for('index') }}">Home</a><span class="sep">/</span>
+      <a href="{{ url_for('production_list') }}">생산 LOT 관리</a><span class="sep">/</span>
+      <span class="current">{{ lot.model_name }} / {{ lot.lot_number }}</span>
+    </div>
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">
+          <i class="bi bi-boxes" style="color:var(--mes-blue)"></i>{{ lot.model_name }} / {{ lot.lot_number }}
+        </h1>
+        <div class="page-subtitle">
+          {% if lot.status == '진행중' %}
+            <span class="badge bg-success">진행중</span>
+          {% else %}
+            <span class="badge bg-secondary">종료됨</span>
+          {% endif %}
+          — 섹션마다 개별적으로 가동 시작/정지/종료합니다
+        </div>
+      </div>
+      <div class="d-flex gap-2 flex-wrap">
+        <a href="{{ url_for('production_lot_export', lot_id=lot.id) }}" class="btn btn-outline-success">
+          <i class="bi bi-file-earmark-excel"></i> 이 LOT 엑셀 내보내기
+        </a>
+        {% if session.get('edit_authorized') %}
+        <a href="{{ url_for('production_edit', lot_id=lot.id) }}" class="btn btn-outline-warning">
+          <i class="bi bi-pencil-square"></i> 수정
+        </a>
+        <form method="post" action="{{ url_for('production_delete', lot_id=lot.id) }}"
+              onsubmit="return confirm('이 LOT과 섹션별 가동기록을 삭제하시겠습니까?\n※ 연결된 고장이력은 삭제되지 않고 LOT 연결만 해제됩니다.')">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn-outline-danger"><i class="bi bi-trash"></i> 삭제</button>
+        </form>
+        {% endif %}
+        {% if lot.status == '진행중' %}
+        <form method="post" action="{{ url_for('production_end', lot_id=lot.id) }}"
+              onsubmit="return confirm('LOT을 종료하시겠습니까?\n※ 아직 진행중인 섹션이 있으면 지금 시각으로 강제 종료 처리됩니다.')">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn-danger"><i class="bi bi-stop-circle"></i> LOT 종료</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+    {% if session.get('edit_authorized') %}
+    <div class="text-muted small mb-2">
+      <i class="bi bi-info-circle me-1"></i>"삭제"는 이 LOT과 섹션별 가동 기록만 지웁니다 — 연결됐던 고장이력 자체는 삭제되지 않고 LOT 연결만 해제됩니다.
+    </div>
+    {% endif %}
+  </div>
+
+  {% if lot.status == '진행중' and session.get('edit_authorized') %}
+  <div class="col-12">
+    <div class="d-flex gap-2 flex-wrap">
+      <form method="post" action="{{ url_for('production_sections_start_all', lot_id=lot.id) }}" class="d-inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-outline-primary btn-sm"><i class="bi bi-play-circle"></i> 대기중인 섹션 모두 시작</button>
+      </form>
+      <button type="button" class="btn btn-outline-warning btn-sm" onclick="openPauseReason('{{ url_for('production_sections_pause_all', lot_id=lot.id) }}', '진행중인 섹션 전체')">
+        <i class="bi bi-pause-circle"></i> 진행중인 섹션 모두 정지
+      </button>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="col-12">
+    <div class="row g-3" id="section-cards">
+      {% for s in section_rows %}
+      <div class="col-12 col-md-6 col-lg-4">
+        <div class="card h-100 {% if s.status == '진행중' %}border-success{% elif s.status == '일시정지' %}border-warning{% endif %}" style="{% if s.status in ['진행중','일시정지'] %}border-width:2px{% endif %}">
+          <div class="card-header d-flex align-items-center justify-content-between">
+            <span class="fw-bold">{{ s.section }}</span>
+            <span class="badge {% if s.status == '진행중' %}bg-success{% elif s.status == '일시정지' %}bg-warning text-dark{% elif s.status == '완료' %}bg-secondary{% else %}bg-light text-dark border{% endif %}">
+              {{ s.status }}
+            </span>
+          </div>
+          <div class="card-body">
+            {% if s.status != '대기' %}
+            <div class="row g-2 mb-2 text-center">
+              <div class="col-6">
+                <div class="text-muted" style="font-size:.68rem">시작</div>
+                <div style="font-size:.78rem;font-weight:700">{{ s.started_at }}</div>
+              </div>
+              <div class="col-6">
+                <div class="text-muted" style="font-size:.68rem">종료</div>
+                <div style="font-size:.78rem;font-weight:700">{{ s.ended_at or '-' }}</div>
+              </div>
+            </div>
+            <div class="d-flex align-items-center justify-content-between mb-3">
+              <div>
+                {% if s.uptime_rate is defined %}
+                <span class="fs-4 fw-bold {% if s.uptime_rate >= 95 %}text-success{% elif s.uptime_rate >= 85 %}text-warning{% else %}text-danger{% endif %}">
+                  {{ '%.1f'|format(s.uptime_rate) }}%
+                </span>
+                {% else %}
+                <span class="text-muted">-</span>
+                {% endif %}
+              </div>
+              {% if s.elapsed_days and s.elapsed_days >= 2 %}
+              <span class="badge {% if s.elapsed_days >= 4 %}bg-danger{% else %}bg-warning text-dark{% endif %}">
+                <i class="bi bi-calendar-week"></i> {{ s.elapsed_days }}일째
+              </span>
+              {% endif %}
+            </div>
+            {% endif %}
+
+            <div class="d-grid gap-2">
+              {% if s.status == '대기' %}
+                {% if lot.status == '진행중' %}
+                <form method="post" action="{{ url_for('production_section_start', lot_id=lot.id, section=s.section) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button type="submit" class="btn btn-primary w-100"><i class="bi bi-play-circle"></i> 가동 시작</button>
+                </form>
+                {% else %}
+                <div class="text-muted text-center small py-2">LOT이 종료되어 시작할 수 없습니다.</div>
+                {% endif %}
+              {% elif s.status == '진행중' %}
+                <button type="button" class="btn btn-warning" onclick="openPauseReason('{{ url_for('production_section_pause', lot_id=lot.id, section=s.section) }}', '{{ s.section }}')">
+                  <i class="bi bi-pause-circle"></i> 가동 정지
+                </button>
+                <form method="post" action="{{ url_for('production_section_end', lot_id=lot.id, section=s.section) }}"
+                      onsubmit="return confirm(&quot;'{{ s.section }}' 가동을 종료하시겠습니까?&quot;)">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button type="submit" class="btn btn-danger w-100"><i class="bi bi-stop-circle"></i> 가동 종료</button>
+                </form>
+                <a href="{{ url_for('production_section_detail', lot_id=lot.id, section=s.section) }}" class="btn btn-outline-primary">상세 보기</a>
+              {% elif s.status == '일시정지' %}
+                <form method="post" action="{{ url_for('production_section_resume', lot_id=lot.id, section=s.section) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button type="submit" class="btn btn-primary w-100"><i class="bi bi-play-circle"></i> 재개</button>
+                </form>
+                <form method="post" action="{{ url_for('production_section_end', lot_id=lot.id, section=s.section) }}"
+                      onsubmit="return confirm(&quot;'{{ s.section }}' 가동을 종료하시겠습니까?&quot;)">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button type="submit" class="btn btn-danger w-100"><i class="bi bi-stop-circle"></i> 가동 종료</button>
+                </form>
+                <a href="{{ url_for('production_section_detail', lot_id=lot.id, section=s.section) }}" class="btn btn-outline-primary">상세 보기</a>
+              {% else %}
+                <a href="{{ url_for('production_section_detail', lot_id=lot.id, section=s.section) }}" class="btn btn-outline-primary">상세 보기</a>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+</div>
+
+<!-- 가동정지 사유 모달 -->
+<div class="modal fade" id="pauseReasonModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered" style="max-width:380px">
+    <div class="modal-content" style="border-radius:14px;overflow:hidden;border:none">
+      <div class="modal-header" style="background:var(--mes-navy);color:#fff;border:none;padding:1rem 1.3rem">
+        <h6 class="modal-title mb-0"><i class="bi bi-pause-circle-fill me-2" style="color:var(--mes-cyan)"></i>가동 정지 사유</h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-4">
+        <p class="text-muted small mb-3" id="pauseReasonTarget"></p>
+        <form method="post" id="pauseReasonForm">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="mb-2">
+            {% for r in pause_reasons %}
+            <div class="form-check">
+              <input class="form-check-input pause-reason-radio" type="radio" name="reason" id="reason-{{ r }}" value="{{ r }}" {% if loop.first %}checked{% endif %}>
+              <label class="form-check-label" for="reason-{{ r }}">{{ r }}</label>
+            </div>
+            {% endfor %}
+          </div>
+          <input type="text" name="reason_custom" id="pauseReasonCustom" class="form-control mb-3"
+                 placeholder="사유를 입력하세요" style="display:none" maxlength="50">
+          <div class="d-grid">
+            <button type="submit" class="btn btn-warning" style="min-height:48px;font-weight:700">
+              <i class="bi bi-pause-circle-fill me-1"></i>가동 정지
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function openPauseReason(actionUrl, targetLabel) {
+  document.getElementById('pauseReasonForm').action = actionUrl;
+  document.getElementById('pauseReasonTarget').textContent = "'" + targetLabel + "' 가동을 정지합니다. 사유를 선택해 주세요.";
+  new bootstrap.Modal(document.getElementById('pauseReasonModal')).show();
+}
+document.querySelectorAll('.pause-reason-radio').forEach(function(radio) {
+  radio.addEventListener('change', function() {
+    const customInput = document.getElementById('pauseReasonCustom');
+    const isOther = this.value === '기타';
+    customInput.style.display = isOther ? 'block' : 'none';
+    customInput.required = isOther;
+    if (isOther) customInput.focus();
+  });
+});
+</script>
+{% endblock %}

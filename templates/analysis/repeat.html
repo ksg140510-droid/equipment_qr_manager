@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% from '_macros.html' import empty_row, empty_block %}
 {% block title %}반복고장 분석{% endblock %}
 
 {% block content %}
@@ -17,6 +18,9 @@
         </h1>
         <div class="page-subtitle">설비 · 증상 · 부품별 고장 현황</div>
       </div>
+      <a href="{{ url_for('analysis_repeat_export') }}" class="btn btn-outline-success btn-sm">
+        <i class="bi bi-file-earmark-excel"></i> 엑셀 리포트
+      </a>
     </div>
   </div>
 
@@ -38,6 +42,8 @@
               <th class="text-center" style="color:var(--mes-danger)">A 생산정지</th>
               <th class="text-center" style="color:var(--mes-warning)">B 품질영향</th>
               <th class="text-center" style="color:var(--mes-success)">C 경미</th>
+              <th class="text-center" title="평균고장간격 - 클수록 안정적">MTBF</th>
+              <th class="text-center" title="평균수리시간 - 작을수록 빠른 조치">MTTR</th>
             </tr>
           </thead>
           <tbody>
@@ -55,10 +61,16 @@
               <td class="text-center fw-bold" style="color:var(--mes-danger)">{{ row.grade_a or 0 }}</td>
               <td class="text-center fw-bold" style="color:var(--mes-warning)">{{ row.grade_b or 0 }}</td>
               <td class="text-center fw-bold" style="color:var(--mes-success)">{{ row.grade_c or 0 }}</td>
+              <td class="text-center" style="white-space:nowrap">
+                {% if row.mtbf_days is not none %}{{ row.mtbf_days }}일{% else %}<span class="text-muted">-</span>{% endif %}
+              </td>
+              <td class="text-center" style="white-space:nowrap">
+                {% if row.mttr_minutes is not none %}{{ row.mttr_minutes }}분{% else %}<span class="text-muted">-</span>{% endif %}
+              </td>
             </tr>
             {% endfor %}
             {% if not eq_stat %}
-            <tr><td colspan="8" class="text-center text-muted py-4">데이터 없음</td></tr>
+            {{ empty_row(10, '분석할 데이터가 없습니다.', icon='bi-bar-chart') }}
             {% endif %}
           </tbody>
         </table>
@@ -92,7 +104,7 @@
             </tr>
             {% endfor %}
             {% if not sym_stat %}
-            <tr><td colspan="3" class="text-center text-muted py-4">데이터 없음</td></tr>
+            {{ empty_row(3, '분석할 데이터가 없습니다.', icon='bi-bar-chart') }}
             {% endif %}
           </tbody>
         </table>
@@ -128,7 +140,7 @@
             </tr>
             {% endfor %}
             {% if not parts_stat %}
-            <tr><td colspan="4" class="text-center text-muted py-4">데이터 없음</td></tr>
+            {{ empty_row(4, '분석할 데이터가 없습니다.', icon='bi-bar-chart') }}
             {% endif %}
           </tbody>
         </table>
@@ -157,7 +169,7 @@
         </div>
         {% endfor %}
         {% if not grade_stat %}
-        <p class="text-muted text-center small py-2">데이터 없음</p>
+        {{ empty_block('분석할 데이터가 없습니다.', icon='bi-bar-chart', py='py-3') }}
         {% endif %}
         <p class="text-muted small mt-3 mb-0">
           <i class="bi bi-info-circle me-1"></i>기간별 발생 추이는 <a href="{{ url_for('analysis_trend') }}">추이 분석</a> 페이지에서 확인하세요.

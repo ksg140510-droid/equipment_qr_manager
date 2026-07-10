@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% from '_macros.html' import empty_row %}
 {% block title %}변경이력{% endblock %}
 
 {% block content %}
@@ -43,7 +44,7 @@
             </tr>
             {% endfor %}
             {% if not logs %}
-            <tr><td colspan="5" class="text-center text-muted py-5">기록이 없습니다.</td></tr>
+            {{ empty_row(5, '변경 기록이 없습니다.', icon='bi-clock-history') }}
             {% endif %}
           </tbody>
         </table>

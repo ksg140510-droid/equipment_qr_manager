@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% from '_macros.html' import empty_row %}
 {% block title %}추이 분석{% endblock %}
 
 {% block content %}
@@ -41,8 +42,14 @@
           </select>
         </div>
         <div class="col-6 col-md-2">
-          <button class="btn btn-primary btn-sm w-100">
+          <button type="submit" class="btn btn-primary btn-sm w-100">
             <i class="bi bi-search"></i> 조회
+          </button>
+        </div>
+        <div class="col-6 col-md-2">
+          <button type="submit" formaction="{{ url_for('analysis_trend_export') }}"
+                  class="btn btn-outline-success btn-sm w-100">
+            <i class="bi bi-file-earmark-excel"></i> 엑셀
           </button>
         </div>
       </form>
@@ -95,7 +102,7 @@
             </tr>
             {% endfor %}
             {% if not trend %}
-            <tr><td colspan="2" class="text-center text-muted py-4">데이터 없음</td></tr>
+            {{ empty_row(2, '분석할 데이터가 없습니다.', icon='bi-bar-chart') }}
             {% endif %}
           </tbody>
         </table>

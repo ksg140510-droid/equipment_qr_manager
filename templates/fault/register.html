@@ -49,6 +49,23 @@
       </div>
     </div>
 
+    <!-- 진행중 LOT 안내 -->
+    {% if active_lot_section %}
+    <div class="alert alert-info py-2 mb-3" style="font-size:.85rem">
+      <i class="bi bi-boxes me-1"></i>
+      이 섹션({{ eq.section }}) 진행중 LOT: <strong>{{ active_lot_section.model_name }}</strong> / {{ active_lot_section.lot_number }}
+      <span class="text-muted">(이 고장은 자동으로 이 LOT/섹션 가동구간에 연결됩니다)</span>
+    </div>
+    {% elif paused_lot_section %}
+    <div class="alert alert-warning py-2 mb-3" style="font-size:.85rem">
+      <i class="bi bi-pause-circle me-1"></i>이 섹션({{ eq.section }})은 <strong>{{ paused_lot_section.model_name }} / {{ paused_lot_section.lot_number }}</strong> 가동이 일시정지 중입니다. (가동 재개 전까지는 이 고장이 가동률 집계에 연결되지 않습니다)
+    </div>
+    {% else %}
+    <div class="alert alert-warning py-2 mb-3" style="font-size:.85rem">
+      <i class="bi bi-exclamation-triangle me-1"></i>이 섹션({{ eq.section }})은 현재 가동 시작되지 않았습니다. (가동률 집계에서 제외됩니다)
+    </div>
+    {% endif %}
+
     <div class="card">
       <div class="card-header ch-danger">
         <i class="bi bi-exclamation-triangle-fill"></i> 고장 내용 입력
@@ -208,10 +225,10 @@
             </div>
           </div>
 
-          <!-- 완료일 -->
+          <!-- 완료일시 -->
           <div class="mb-3">
-            <label class="form-label">완료일</label>
-            <input type="date" name="completed_at" class="form-control" value="{{ today }}">
+            <label class="form-label">완료일시 <span class="text-muted fw-normal" style="font-size:.72rem">(조치가 아직 안 끝났으면 비워두세요)</span></label>
+            <input type="datetime-local" name="completed_at" class="form-control">
           </div>
 
           <!-- ── 고장 사진 (최대 5장) ── -->

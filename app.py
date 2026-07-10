@@ -7,23 +7,46 @@ import socket
 import secrets
 import logging
 import calendar
+import threading
+import sqlite3
 import qrcode
 import urllib.request
 import urllib.error
 from urllib.parse import urlencode
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, time as dt_time
 from flask import (Flask, render_template, request, redirect, url_for,
                    flash, send_file, jsonify, abort, session)
 from database import get_db, init_db
 from PIL import Image
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from werkzeug.utils import secure_filename
+from openpyxl.chart import BarChart, Reference
+from openpyxl.chart.label import DataLabelList
+from openpyxl.chart.marker import DataPoint
+from openpyxl.chart.shapes import GraphicalProperties
+from openpyxl.drawing.line import LineProperties
+from openpyxl.drawing.text import Paragraph, ParagraphProperties, CharacterProperties
+from openpyxl.worksheet.page import PageMargins
+from openpyxl.drawing.spreadsheet_drawing import TwoCellAnchor, AnchorMarker
+from openpyxl.chart.layout import Layout, ManualLayout
+from werkzeug.utils import secure_filename, safe_join
 from werkzeug.security import generate_password_hash, check_password_hash
+from cryptography.fernet import Fernet, InvalidToken
 
 app = Flask(__name__)
 
 BASE_DIR    = os.path.dirname(__file__)
+LOG_PATH    = os.path.join(BASE_DIR, 'server.log')
+
+# ─── 로깅 (보안 이벤트 등 서버 로그를 파일로 보관) ──────────
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.FileHandler(LOG_PATH, encoding='utf-8'),
+        logging.StreamHandler(),
+    ]
+)
 
 # ─── 세션 서명용 비밀키 (최초 실행 시 랜덤 생성 후 파일로 보관) ──
 SECRET_KEY_PATH = os.path.join(BASE_DIR, 'secret_key.txt')
@@ -41,6 +64,7 @@ def _load_or_create_secret_key():
 app.secret_key = _load_or_create_secret_key()
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 요청당 최대 50MB (사진 최대 10장 대비)
 app.permanent_session_lifetime = timedelta(minutes=60)
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
 # ─── CSRF 보호 (세션 기반 토큰) ──────────────────────────
 @app.context_processor
@@ -65,8 +89,25 @@ def _inject_actor_workers():
     db.close()
     return dict(actor_workers=names)
 
+# ─── 보안 응답 헤더 ──────────────────────────────────────
+@app.after_request
+def _set_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net; "
+        "img-src 'self' data:; "
+        "connect-src 'self'"
+    )
+    response.headers.pop('Server', None)
+    return response
+
 # ─── 로그인 벽 (QR 고장등록 경로는 예외) ─────────────────
-LOGIN_EXEMPT_ENDPOINTS = {'login', 'static', 'fault_register', 'fault_select', 'kakao_callback'}
+LOGIN_EXEMPT_ENDPOINTS = {'login', 'static', 'fault_register', 'fault_select', 'kakao_callback', 'worker_delete', 'service_worker'}
 
 @app.before_request
 def _require_login():
@@ -87,6 +128,12 @@ ALLOWED_EXT = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 
 SECTIONS = ['Section 1', 'Section 2', 'Section 3',
             'Section 4.1', 'Section 4.2', 'Section 4.3', 'Section 4.4']
+
+# 가동정지 사유 목록. '퇴근'만 업무시간 외로 보고 가동대상시간 자체에서 제외한다
+# (점심시간 등 휴식시간과 동일하게 취급). 그 외 사유(설비점검/자재대기/교체/기타)는
+# 업무시간 중 실제로 설비가 멈춘 것이므로 고장과 동일하게 설비가동률에 반영(차감)된다.
+PAUSE_REASONS = ['퇴근', '설비점검', '자재대기', '교체', '기타']
+PAUSE_NONWORKING_REASONS = {'퇴근'}
 
 SYMPTOMS = [
     '센서 감지불량', '실린더 동작불량', '에어누설 (Air Leak)',
@@ -114,18 +161,143 @@ def _load_admin_password_hash():
         h = generate_password_hash(_DEFAULT_ADMIN_PASSWORD)
         with open(ADMIN_CONFIG_PATH, 'w', encoding='utf-8') as f:
             json.dump({'password_hash': h}, f)
+        logging.warning(
+            'admin_config.json이 없어 기본 비밀번호(%s)로 새로 생성했습니다. 로그인 후 반드시 비밀번호를 변경하세요.',
+            _DEFAULT_ADMIN_PASSWORD)
         return h
 
 def check_admin_password(pw):
     return check_password_hash(_load_admin_password_hash(), pw or '')
 
+def set_admin_password(new_password):
+    h = generate_password_hash(new_password)
+    with open(ADMIN_CONFIG_PATH, 'w', encoding='utf-8') as f:
+        json.dump({'password_hash': h}, f)
+
+
+# ─── 로그인 실패 잠금 (brute-force 방지, 서비스 재시작에도 유지) ──
+_LOGIN_MAX_ATTEMPTS    = 5
+_LOGIN_LOCKOUT_SECONDS = 300
+LOGIN_ATTEMPTS_PATH = os.path.join(BASE_DIR, 'login_attempts.json')
+
+def _load_login_attempts():
+    try:
+        with open(LOGIN_ATTEMPTS_PATH, encoding='utf-8') as f:
+            data = json.load(f)
+        now = time.time()
+        return {ip: info for ip, info in data.items() if info.get('locked_until', 0) > now}
+    except Exception:
+        return {}
+
+def _save_login_attempts():
+    try:
+        with open(LOGIN_ATTEMPTS_PATH, 'w', encoding='utf-8') as f:
+            json.dump(_login_attempts, f)
+    except Exception:
+        logging.exception('login_attempts.json 저장 실패')
+
+_login_attempts = _load_login_attempts()  # ip -> {'count': int, 'locked_until': float}
+
+def _login_lock_remaining(ip):
+    info = _login_attempts.get(ip)
+    if not info:
+        return 0
+    remaining = info['locked_until'] - time.time()
+    if remaining > 0:
+        logging.warning('잠긴 IP의 접근 시도 차단: %s (남은 잠금시간 %d초)', ip, int(remaining))
+    return max(0, remaining)
+
+def _register_login_failure(ip):
+    info = _login_attempts.setdefault(ip, {'count': 0, 'locked_until': 0})
+    info['count'] += 1
+    logging.warning('로그인 비밀번호 실패: %s (%d/%d회)', ip, info['count'], _LOGIN_MAX_ATTEMPTS)
+    if info['count'] >= _LOGIN_MAX_ATTEMPTS:
+        info['locked_until'] = time.time() + _LOGIN_LOCKOUT_SECONDS
+        info['count'] = 0
+        logging.warning('brute-force 의심으로 IP 잠금: %s (%d초간)', ip, _LOGIN_LOCKOUT_SECONDS)
+        _notify_login_lockout(ip)
+    _save_login_attempts()
+
+def _notify_login_lockout(ip):
+    if not _kakao_connected():
+        return
+    text = (f'🔒 보안 경고 - 로그인 잠금\n'
+            f'IP {ip}에서 비밀번호를 {_LOGIN_MAX_ATTEMPTS}회 연속 틀려 {_LOGIN_LOCKOUT_SECONDS // 60}분간 접속이 차단되었습니다.\n'
+            f'본인이 아니라면 무단 접근 시도일 수 있습니다.')
+    try:
+        _kakao_send_to_all(text, f'http://{get_local_ip()}:5001/login')
+    except Exception:
+        logging.exception('_notify_login_lockout failed')
+
+def _register_login_success(ip):
+    if _login_attempts.pop(ip, None) is not None:
+        _save_login_attempts()
+
 
 # ─── 카카오톡 알림 연동 (A등급 고장 발생 시) ──────────────────
 KAKAO_CONFIG_PATH   = os.path.join(BASE_DIR, 'kakao_config.json')
+KAKAO_ENCRYPT_KEY_PATH = os.path.join(BASE_DIR, 'kakao_encrypt.key')
 KAKAO_AUTHORIZE_URL = 'https://kauth.kakao.com/oauth/authorize'
 KAKAO_TOKEN_URL     = 'https://kauth.kakao.com/oauth/token'
 KAKAO_SEND_URL      = 'https://kapi.kakao.com/v2/api/talk/memo/default/send'
 KAKAO_USER_ME_URL   = 'https://kapi.kakao.com/v2/user/me'
+
+try:
+    import win32crypt
+    _DPAPI_LOCAL_MACHINE = 4  # CRYPTPROTECT_LOCAL_MACHINE - 이 기기 밖으로 파일이 유출돼도 복호화 불가
+    _DPAPI_AVAILABLE = True
+except ImportError:
+    _DPAPI_AVAILABLE = False
+
+def _dpapi_protect(data: bytes) -> bytes:
+    return win32crypt.CryptProtectData(data, 'kakao_encrypt_key', None, None, None, _DPAPI_LOCAL_MACHINE)
+
+def _dpapi_unprotect(data: bytes) -> bytes:
+    return win32crypt.CryptUnprotectData(data, None, None, None, _DPAPI_LOCAL_MACHINE)[1]
+
+def _save_kakao_key(key: bytes):
+    with open(KAKAO_ENCRYPT_KEY_PATH, 'wb') as f:
+        f.write(_dpapi_protect(key) if _DPAPI_AVAILABLE else key)
+
+def _load_or_create_kakao_key():
+    if os.path.exists(KAKAO_ENCRYPT_KEY_PATH):
+        with open(KAKAO_ENCRYPT_KEY_PATH, 'rb') as f:
+            raw = f.read().strip()
+        if raw:
+            if _DPAPI_AVAILABLE:
+                try:
+                    return _dpapi_unprotect(raw)
+                except Exception:
+                    pass
+            # DPAPI 보호 전(레거시) 평문 키였을 수 있음 - 유효하면 그대로 쓰고 다음 저장 시 DPAPI로 이전
+            try:
+                Fernet(raw)
+                _save_kakao_key(raw)
+                return raw
+            except Exception:
+                logging.warning('kakao_encrypt.key를 읽지 못했습니다 - 새 키를 생성합니다.')
+    key = Fernet.generate_key()
+    _save_kakao_key(key)
+    return key
+
+_kakao_fernet = Fernet(_load_or_create_kakao_key())
+_KAKAO_ENC_PREFIX = 'enc:'
+_KAKAO_SECRET_FIELDS = ('client_secret',)
+_KAKAO_ACCOUNT_SECRET_FIELDS = ('access_token', 'refresh_token')
+
+def _kakao_encrypt_value(v):
+    if not v or not isinstance(v, str) or v.startswith(_KAKAO_ENC_PREFIX):
+        return v
+    return _KAKAO_ENC_PREFIX + _kakao_fernet.encrypt(v.encode('utf-8')).decode('ascii')
+
+def _kakao_decrypt_value(v):
+    if not v or not isinstance(v, str) or not v.startswith(_KAKAO_ENC_PREFIX):
+        return v  # 평문(암호화 적용 이전 값) 그대로 반환 - 다음 저장 시 자동 암호화됨
+    try:
+        return _kakao_fernet.decrypt(v[len(_KAKAO_ENC_PREFIX):].encode('ascii')).decode('utf-8')
+    except InvalidToken:
+        logging.warning('kakao_config.json 복호화 실패 - 키 파일이 바뀌었을 수 있습니다.')
+        return v
 
 def _kakao_load():
     try:
@@ -134,11 +306,29 @@ def _kakao_load():
     except Exception:
         cfg = {}
     cfg.setdefault('accounts', [])
+    for field in _KAKAO_SECRET_FIELDS:
+        if field in cfg:
+            cfg[field] = _kakao_decrypt_value(cfg[field])
+    for account in cfg['accounts']:
+        for field in _KAKAO_ACCOUNT_SECRET_FIELDS:
+            if field in account:
+                account[field] = _kakao_decrypt_value(account[field])
     return cfg
 
 def _kakao_save(cfg):
+    out = dict(cfg)
+    for field in _KAKAO_SECRET_FIELDS:
+        if field in out:
+            out[field] = _kakao_encrypt_value(out[field])
+    out['accounts'] = []
+    for account in cfg.get('accounts', []):
+        acc = dict(account)
+        for field in _KAKAO_ACCOUNT_SECRET_FIELDS:
+            if field in acc:
+                acc[field] = _kakao_encrypt_value(acc[field])
+        out['accounts'].append(acc)
     with open(KAKAO_CONFIG_PATH, 'w', encoding='utf-8') as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
+        json.dump(out, f, ensure_ascii=False, indent=2)
 
 def _kakao_connected():
     return bool(_kakao_load().get('accounts'))
@@ -338,6 +528,293 @@ def register_worker(db, name):
         db.execute("INSERT OR IGNORE INTO workers (name) VALUES (?)", (name,))
 
 
+# ─── 생산 LOT / 설비가동률 ────────────────────────────────
+def get_active_lot_section(db, section):
+    """해당 섹션에서 현재 진행중(가동 시작을 눌렀지만 종료 안 한) 구간을 반환."""
+    return db.execute(
+        "SELECT * FROM production_lot_sections WHERE section=? AND status='진행중' ORDER BY started_at DESC LIMIT 1",
+        (section,)
+    ).fetchone()
+
+
+def _parse_dt(s):
+    """'YYYY-MM-DD HH:MM:SS' 형식이 기본이지만, 생산LOT 기능 도입 이전에 날짜만(시간 없이)
+    저장된 예전 고장이력(completed_at)도 있으므로 'YYYY-MM-DD'는 자정으로 보고 폴백 파싱한다."""
+    try:
+        return datetime.strptime(s, '%Y-%m-%d %H:%M:%S')
+    except ValueError:
+        return datetime.strptime(s, '%Y-%m-%d')
+
+
+def _overlap_seconds(a_start, a_end, b_start, b_end):
+    """[a_start,a_end) 구간과 [b_start,b_end) 구간이 겹치는 초 (안 겹치면 0)."""
+    latest_start = max(a_start, b_start)
+    earliest_end = min(a_end, b_end)
+    return max(0, (earliest_end - latest_start).total_seconds())
+
+
+def _get_section_pauses(db, lot_section_id, win_start, win_end):
+    """섹션의 가동정지 기록을 win_start~win_end로 클리핑해서 반환.
+    'nonworking'=True(퇴근)는 업무시간 외로 보고 가동대상시간에서 제외되고,
+    False(설비점검/자재대기/교체/기타)는 업무시간 중 실제 다운타임으로 설비가동률에 반영된다."""
+    pauses = db.execute(
+        "SELECT * FROM production_lot_section_pauses WHERE lot_section_id=? ORDER BY paused_at",
+        (lot_section_id,)
+    ).fetchall()
+    result = []
+    for p in pauses:
+        s = max(win_start, _parse_dt(p['paused_at']))
+        e = min(win_end, _parse_dt(p['resumed_at']) if p['resumed_at'] else win_end)
+        if e > s:
+            reason = p['reason'] or '퇴근'
+            result.append({
+                'start': s, 'end': e, 'reason': reason,
+                'label': f'가동정지({reason})',
+                'nonworking': reason in PAUSE_NONWORKING_REASONS,
+            })
+    return result
+
+
+def _excluded_intervals(db, lot_section_id, win_start, win_end):
+    """가동대상시간(분모)에서 빠지는 구간(반복되는 휴식시간 + '퇴근' 사유의 가동정지)을
+    시간순으로 병합해서 반환. 겹치는 구간은 하나로 합쳐서 이중으로 차감되지 않도록 한다."""
+    schedules = db.execute("SELECT name, start_time, end_time FROM break_schedules").fetchall()
+    raw = []
+    day = win_start.date()
+    end_day = win_end.date()
+    while day <= end_day:
+        for sch in schedules:
+            try:
+                sh, sm = (int(x) for x in sch['start_time'].split(':'))
+                eh, em = (int(x) for x in sch['end_time'].split(':'))
+                b_start = datetime.combine(day, dt_time(sh, sm))
+                b_end = datetime.combine(day, dt_time(eh, em))
+            except (ValueError, TypeError):
+                continue
+            if b_end <= b_start:
+                continue
+            s, e = max(win_start, b_start), min(win_end, b_end)
+            if e > s:
+                raw.append({'start': s, 'end': e, 'label': sch['name'], 'kind': 'break'})
+        day += timedelta(days=1)
+
+    for p in _get_section_pauses(db, lot_section_id, win_start, win_end):
+        if p['nonworking']:
+            raw.append({'start': p['start'], 'end': p['end'], 'label': p['label'], 'kind': 'pause'})
+
+    # 수동 가동정지가 우선순위 높음 (겹치면 정지 사유 라벨을 그대로 유지)
+    raw.sort(key=lambda x: (x['start'], x['kind'] != 'pause'))
+    merged = []
+    for iv in raw:
+        if merged and iv['start'] <= merged[-1]['end']:
+            if iv['end'] > merged[-1]['end']:
+                merged[-1]['end'] = iv['end']
+            if merged[-1]['kind'] != 'pause' and iv['kind'] == 'pause':
+                merged[-1]['label'] = iv['label']
+                merged[-1]['kind'] = 'pause'
+        else:
+            merged.append(dict(iv))
+    return merged
+
+
+def _downtime_pause_intervals(db, lot_section_id, win_start, win_end):
+    """가동대상시간(분모) 안에서 실제 다운타임으로 카운트되는 가동정지 구간
+    (퇴근 외 사유). 고장과 마찬가지로 설비가동률에 반영(차감)된다."""
+    return [p for p in _get_section_pauses(db, lot_section_id, win_start, win_end) if not p['nonworking']]
+
+
+def compute_section_stats(db, lot_section_id, lot_section_row=None):
+    """섹션 가동구간 하나(시작~종료)의 가동대상시간/고장시간/가동률 계산.
+    아직 진행 중(종료 안 함)이면 현재 시각까지로 계산한 미리보기 값을 반환한다."""
+    ls = lot_section_row or db.execute(
+        "SELECT * FROM production_lot_sections WHERE id=?", (lot_section_id,)
+    ).fetchone()
+    if not ls:
+        return None
+
+    win_start = _parse_dt(ls['started_at'])
+    win_end = _parse_dt(ls['ended_at']) if ls['ended_at'] else datetime.now()
+
+    total_seconds = max(0.0, (win_end - win_start).total_seconds())
+    excluded = _excluded_intervals(db, lot_section_id, win_start, win_end)
+    excluded_seconds = sum((iv['end'] - iv['start']).total_seconds() for iv in excluded)
+    available_seconds = max(0.0, total_seconds - excluded_seconds)
+
+    faults = db.execute("""
+        SELECT occurred_at, completed_at, symptom, cause, action_detail, worker
+        FROM fault_history WHERE lot_section_id = ?
+        ORDER BY occurred_at
+    """, (lot_section_id,)).fetchall()
+
+    fault_seconds = 0.0
+    fault_rows = []
+    for f in faults:
+        occ = _parse_dt(f['occurred_at'])
+        comp = _parse_dt(f['completed_at']) if f['completed_at'] else win_end
+        comp = min(comp, win_end)
+        duration = max(0.0, (comp - occ).total_seconds())
+        fault_seconds += duration
+        fault_rows.append({
+            'occurred_at': f['occurred_at'],
+            'completed_at': f['completed_at'],
+            'duration_minutes': int(duration // 60),
+            'symptom': f['symptom'],
+            'cause': f['cause'],
+            'action_detail': f['action_detail'],
+            'worker': f['worker'],
+            'ongoing': f['completed_at'] is None,
+        })
+
+    downtime_pauses = _downtime_pause_intervals(db, lot_section_id, win_start, win_end)
+    pause_downtime_seconds = 0.0
+    pause_rows = []
+    for p in downtime_pauses:
+        duration = (p['end'] - p['start']).total_seconds()
+        pause_downtime_seconds += duration
+        pause_rows.append({
+            'paused_at': p['start'].strftime('%Y-%m-%d %H:%M:%S'),
+            'resumed_at': p['end'].strftime('%Y-%m-%d %H:%M:%S') if p['end'] < win_end else None,
+            'duration_minutes': int(duration // 60),
+            'reason': p['reason'],
+            'ongoing': p['end'] >= win_end,
+        })
+
+    downtime_total = fault_seconds + pause_downtime_seconds
+    if available_seconds > 0:
+        uptime_rate = max(0.0, min(100.0, (available_seconds - downtime_total) / available_seconds * 100))
+    else:
+        uptime_rate = 100.0
+
+    return {
+        'section': ls['section'],
+        'available_seconds': int(available_seconds),
+        'fault_seconds': int(fault_seconds),
+        'fault_count': len(faults),
+        'pause_downtime_seconds': int(pause_downtime_seconds),
+        'pause_count': len(pause_rows),
+        'uptime_rate': round(uptime_rate, 1),
+        'faults': fault_rows,
+        'pauses': pause_rows,
+    }
+
+
+def get_section_dashboard_status(db):
+    """대시보드용: 섹션(SECTIONS) 각각의 현재 가동 상태와 실시간 가동률.
+    대기 중인 섹션은, 진행중인 LOT이 정확히 하나뿐이고 그 LOT에서 아직 안 쓴 섹션이면
+    'start_lot_id'를 채워서 대시보드에서 LOT 선택 없이 바로 시작할 수 있게 한다."""
+    rows = db.execute("""
+        SELECT ls.*, l.model_name, l.lot_number
+        FROM production_lot_sections ls
+        JOIN production_lots l ON ls.lot_id = l.id
+        WHERE ls.status IN ('진행중','일시정지')
+    """).fetchall()
+    by_section = {r['section']: r for r in rows}
+
+    active_lots = db.execute(
+        "SELECT id, model_name, lot_number FROM production_lots WHERE status='진행중' ORDER BY created_at DESC"
+    ).fetchall()
+    used_by_sole_active_lot = set()
+    if len(active_lots) == 1:
+        used_by_sole_active_lot = {r['section'] for r in db.execute(
+            "SELECT section FROM production_lot_sections WHERE lot_id=?", (active_lots[0]['id'],)
+        ).fetchall()}
+
+    result = []
+    for section in SECTIONS:
+        ls = by_section.get(section)
+        if ls:
+            stats = compute_section_stats(db, ls['id'], lot_section_row=ls)
+            result.append({
+                'section': section,
+                'running': ls['status'] == '진행중',
+                'paused': ls['status'] == '일시정지',
+                'lot_id': ls['lot_id'],
+                'model_name': ls['model_name'],
+                'lot_number': ls['lot_number'],
+                'uptime_rate': stats['uptime_rate'],
+                'fault_count': stats['fault_count'],
+            })
+        else:
+            start_lot_id = None
+            if len(active_lots) == 1 and section not in used_by_sole_active_lot:
+                start_lot_id = active_lots[0]['id']
+            result.append({
+                'section': section, 'running': False, 'paused': False,
+                'start_lot_id': start_lot_id,
+                'multiple_active_lots': len(active_lots) > 1,
+            })
+    return result
+
+
+def _subtract_intervals(base_list, cutters):
+    """base_list의 각 구간에서 cutters와 겹치는 부분을 잘라내고 남은 조각을 반환."""
+    out = []
+    for b in base_list:
+        pieces = [(b['start'], b['end'])]
+        for c in cutters:
+            next_pieces = []
+            for ps, pe in pieces:
+                if c['end'] <= ps or c['start'] >= pe:
+                    next_pieces.append((ps, pe))
+                    continue
+                if c['start'] > ps:
+                    next_pieces.append((ps, c['start']))
+                if c['end'] < pe:
+                    next_pieces.append((c['end'], pe))
+            pieces = next_pieces
+        out += [{'type': b['type'], 'start': ps, 'end': pe, 'label': b['label']} for ps, pe in pieces if pe > ps]
+    return out
+
+
+def compute_section_timeline(db, ls):
+    """섹션 가동구간을 시간순으로 정상가동/휴식시간/가동정지(다운타임)/고장정지 구간으로 나눈 목록을 반환.
+    우선순위는 고장 > 가동정지(다운타임) > 휴식시간 순 (실제로 멈춘 사실이 더 중요하므로)."""
+    win_start = _parse_dt(ls['started_at'])
+    win_end = _parse_dt(ls['ended_at']) if ls['ended_at'] else datetime.now()
+    if win_end <= win_start:
+        return []
+
+    break_intervals = [
+        {'type': 'break', 'start': iv['start'], 'end': iv['end'], 'label': iv['label']}
+        for iv in _excluded_intervals(db, ls['id'], win_start, win_end)
+    ]
+
+    downtime_intervals = [
+        {'type': 'downtime', 'start': p['start'], 'end': p['end'], 'label': p['label']}
+        for p in _downtime_pause_intervals(db, ls['id'], win_start, win_end)
+    ]
+
+    faults = db.execute("""
+        SELECT occurred_at, completed_at, symptom, cause FROM fault_history
+        WHERE lot_section_id = ? ORDER BY occurred_at
+    """, (ls['id'],)).fetchall()
+    fault_intervals = []
+    for f in faults:
+        s = max(win_start, _parse_dt(f['occurred_at']))
+        e = min(win_end, _parse_dt(f['completed_at']) if f['completed_at'] else win_end)
+        if e > s:
+            label = (f['symptom'] or f['cause'] or '고장').split(',')[0].strip()
+            fault_intervals.append({'type': 'fault', 'start': s, 'end': e, 'label': label})
+
+    # 우선순위: 고장 > 가동정지(다운타임) > 휴식시간 - 겹치는 조각은 우선순위 낮은 쪽에서 잘라낸다
+    downtime_intervals = _subtract_intervals(downtime_intervals, fault_intervals)
+    break_intervals = _subtract_intervals(break_intervals, fault_intervals + downtime_intervals)
+
+    all_intervals = sorted(break_intervals + downtime_intervals + fault_intervals, key=lambda x: x['start'])
+
+    segments = []
+    cursor = win_start
+    for iv in all_intervals:
+        if iv['start'] > cursor:
+            segments.append({'type': 'normal', 'start': cursor, 'end': iv['start'], 'label': '정상가동'})
+        segments.append(iv)
+        cursor = max(cursor, iv['end'])
+    if cursor < win_end:
+        segments.append({'type': 'normal', 'start': cursor, 'end': win_end, 'label': '정상가동'})
+
+    return segments
+
+
 def log_action(action, target_type, target_id, detail=None):
     db = get_db()
     db.execute(
@@ -349,6 +826,11 @@ def log_action(action, target_type, target_id, detail=None):
 
 
 def get_local_ip():
+    # Tailscale 등으로 암호화 접속을 강제하려면 QR_SERVER_HOST 환경변수(IP 또는
+    # MagicDNS 호스트명)를 설정한다. 실행.bat 참고. 설정 없으면 기존처럼 LAN IP 자동 감지.
+    override = os.environ.get('QR_SERVER_HOST', '').strip()
+    if override:
+        return override
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(('8.8.8.8', 80))
@@ -364,6 +846,17 @@ def parse_occurred_at(raw):
     raw = (raw or '').strip()
     if not raw:
         return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    raw = raw.replace('T', ' ')
+    if len(raw) == 16:
+        raw += ':00'
+    return raw
+
+
+def parse_optional_datetime(raw):
+    """datetime-local 입력값을 DB 저장 형식으로 변환. 값이 없으면 None (완료 안 됨)."""
+    raw = (raw or '').strip()
+    if not raw:
+        return None
     raw = raw.replace('T', ' ')
     if len(raw) == 16:
         raw += ':00'
@@ -501,6 +994,8 @@ def index():
         GROUP BY status
     """).fetchall()
 
+    section_status = get_section_dashboard_status(db)
+
     db.close()
 
     today_dt = date.today()
@@ -520,7 +1015,16 @@ def index():
         eq_chart=eq_chart, symptom_chart=symptom_chart,
         parts_chart=parts_chart,
         week_start=week_start, month_start=month_start,
+        section_status=section_status, pause_reasons=PAUSE_REASONS,
         kakao_connected=_kakao_connected(), kakao_accounts=_kakao_load().get('accounts', []))
+
+
+@app.route('/dashboard/sections.json')
+def dashboard_sections_json():
+    db = get_db()
+    section_status = get_section_dashboard_status(db)
+    db.close()
+    return jsonify(ok=True, sections=section_status)
 
 
 # ──────────────────────────────────────────────
@@ -797,7 +1301,7 @@ def fault_register(eq_id):
         worker_sel   = request.form.get('worker_select', '').strip()
         worker_custom= request.form.get('worker_custom', '').strip()
         worker       = worker_custom if worker_sel == '__new__' else worker_sel
-        completed_at = request.form.get('completed_at', '').strip() or None
+        completed_at = parse_optional_datetime(request.form.get('completed_at', ''))
         grade        = request.form.get('grade', '').strip()
         grade_note   = request.form.get('grade_note', '').strip() if grade == 'D' else None
         status       = request.form.get('status', '미조치').strip()
@@ -807,13 +1311,17 @@ def fault_register(eq_id):
         if worker:
             register_worker(db, worker)
 
+        active_lot_section = get_active_lot_section(db, eq['section'])
+        lot_section_id = active_lot_section['id'] if active_lot_section else None
+        lot_id = active_lot_section['lot_id'] if active_lot_section else None
+
         cur = db.execute("""
             INSERT INTO fault_history
-            (equipment_id,eq_number,eq_name,occurred_at,symptom,cause,action_detail,worker,completed_at,grade,grade_note,photo_fault,photo_action,status,status_note)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            (equipment_id,eq_number,eq_name,occurred_at,symptom,cause,action_detail,worker,completed_at,grade,grade_note,photo_fault,photo_action,status,status_note,lot_id,lot_section_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (eq_id, eq['eq_number'], eq['eq_name'], occurred_at,
               symptom, cause, action_detail, worker, completed_at, grade, grade_note,
-              None, None, status, status_note))
+              None, None, status, status_note, lot_id, lot_section_id))
         fault_id = cur.lastrowid
 
         # 고장 사진 저장 (최대 5장)
@@ -865,12 +1373,30 @@ def fault_register(eq_id):
         return redirect(url_for('equipment_detail', eq_id=eq_id))
 
     workers = get_workers(db)
+    active_lot_section = db.execute("""
+        SELECT ls.*, l.model_name, l.lot_number
+        FROM production_lot_sections ls
+        JOIN production_lots l ON ls.lot_id = l.id
+        WHERE ls.section=? AND ls.status='진행중'
+        ORDER BY ls.started_at DESC LIMIT 1
+    """, (eq['section'],)).fetchone()
+    paused_lot_section = None
+    if not active_lot_section:
+        paused_lot_section = db.execute("""
+            SELECT ls.*, l.model_name, l.lot_number
+            FROM production_lot_sections ls
+            JOIN production_lots l ON ls.lot_id = l.id
+            WHERE ls.section=? AND ls.status='일시정지'
+            ORDER BY ls.started_at DESC LIMIT 1
+        """, (eq['section'],)).fetchone()
     db.close()
     return render_template('fault/register.html',
                            eq=eq, symptoms=SYMPTOMS, grades=GRADES,
                            parts=PARTS, statuses=STATUSES, workers=workers,
                            today=date.today().isoformat(),
-                           now_dt=datetime.now().strftime('%Y-%m-%dT%H:%M'))
+                           now_dt=datetime.now().strftime('%Y-%m-%dT%H:%M'),
+                           active_lot_section=active_lot_section,
+                           paused_lot_section=paused_lot_section)
 
 
 # ──────────────────────────────────────────────
@@ -970,12 +1496,19 @@ def fault_detail(fault_id):
 # ──────────────────────────────────────────────
 @app.route('/fault/auth', methods=['POST'])
 def fault_auth():
+    ip = request.remote_addr
+    remaining = _login_lock_remaining(ip)
+    if remaining > 0:
+        flash(f'비밀번호를 너무 많이 틀렸습니다. {int(remaining // 60) + 1}분 후 다시 시도하세요.', 'danger')
+        return redirect(request.referrer or url_for('fault_list'))
+
     pw           = request.form.get('password', '').strip()
     actor_sel    = request.form.get('actor', '').strip()
     actor_custom = request.form.get('actor_custom', '').strip()
     actor        = actor_custom if actor_sel == '__new__' else actor_sel
     next_url = request.form.get('next', '/')
     if check_admin_password(pw):
+        _register_login_success(ip)
         if actor:
             db = get_db()
             register_worker(db, actor)
@@ -985,19 +1518,49 @@ def fault_auth():
         session['edit_authorized'] = True
         session['actor_name'] = actor or '이름 미선택'
         return redirect(next_url)
+    _register_login_failure(ip)
     flash('비밀번호가 올바르지 않습니다.', 'danger')
     return redirect(request.referrer or url_for('fault_list'))
+
+
+@app.route('/worker/delete', methods=['POST'])
+def worker_delete():
+    ip = request.remote_addr
+    remaining = _login_lock_remaining(ip)
+    if remaining > 0:
+        return jsonify(ok=False, error=f'비밀번호를 너무 많이 틀렸습니다. {int(remaining // 60) + 1}분 후 다시 시도하세요.'), 429
+
+    pw   = request.form.get('password', '').strip()
+    name = request.form.get('name', '').strip()
+    if not check_admin_password(pw):
+        _register_login_failure(ip)
+        return jsonify(ok=False, error='비밀번호가 올바르지 않습니다.'), 403
+    _register_login_success(ip)
+    if not name:
+        return jsonify(ok=False, error='삭제할 이름을 선택하세요.'), 400
+    db = get_db()
+    db.execute("DELETE FROM workers WHERE name=?", (name,))
+    db.commit()
+    db.close()
+    return jsonify(ok=True)
 
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     next_url = request.values.get('next') or url_for('index')
     if request.method == 'POST':
+        ip = request.remote_addr
+        remaining = _login_lock_remaining(ip)
+        if remaining > 0:
+            flash(f'비밀번호를 너무 많이 틀렸습니다. {int(remaining // 60) + 1}분 후 다시 시도하세요.', 'danger')
+            return redirect(url_for('login', next=next_url))
+
         pw           = request.form.get('password', '').strip()
         actor_sel    = request.form.get('actor', '').strip()
         actor_custom = request.form.get('actor_custom', '').strip()
         actor        = actor_custom if actor_sel == '__new__' else actor_sel
         if check_admin_password(pw):
+            _register_login_success(ip)
             if actor:
                 db = get_db()
                 register_worker(db, actor)
@@ -1007,12 +1570,38 @@ def login():
             session['edit_authorized'] = True
             session['actor_name'] = actor or '이름 미선택'
             return redirect(next_url)
+        _register_login_failure(ip)
         flash('비밀번호가 올바르지 않습니다.', 'danger')
         return redirect(url_for('login', next=next_url))
     db = get_db()
     workers = get_workers(db)
     db.close()
     return render_template('login.html', workers=workers, next=next_url)
+
+
+@app.route('/settings/password', methods=['POST'])
+def change_admin_password():
+    if not session.get('edit_authorized'):
+        flash('로그인 후 이용해 주세요.', 'danger')
+        return redirect(url_for('login'))
+    current_pw = request.form.get('current_password', '').strip()
+    new_pw     = request.form.get('new_password', '').strip()
+    new_pw2    = request.form.get('new_password_confirm', '').strip()
+    next_url   = request.form.get('next') or url_for('index')
+
+    if not check_admin_password(current_pw):
+        flash('현재 비밀번호가 올바르지 않습니다.', 'danger')
+        return redirect(next_url)
+    if len(new_pw) < 4:
+        flash('새 비밀번호는 4자 이상이어야 합니다.', 'danger')
+        return redirect(next_url)
+    if new_pw != new_pw2:
+        flash('새 비밀번호가 서로 일치하지 않습니다.', 'danger')
+        return redirect(next_url)
+
+    set_admin_password(new_pw)
+    flash('비밀번호가 변경되었습니다.', 'success')
+    return redirect(next_url)
 
 
 @app.route('/logout')
@@ -1046,7 +1635,7 @@ def fault_edit(fault_id):
         worker_sel   = request.form.get('worker_select', '').strip()
         worker_custom= request.form.get('worker_custom', '').strip()
         worker       = worker_custom if worker_sel == '__new__' else worker_sel
-        completed_at = request.form.get('completed_at', '').strip() or None
+        completed_at = parse_optional_datetime(request.form.get('completed_at', ''))
         grade        = request.form.get('grade', '').strip()
         grade_note   = request.form.get('grade_note', '').strip() if grade == 'D' else None
         status       = request.form.get('status', '미조치').strip()
@@ -1125,6 +1714,7 @@ def fault_edit(fault_id):
     db.close()
     selected_symptoms = [s.strip() for s in (fault['symptom'] or '').split(',') if s.strip()]
     occurred_at_val = (fault['occurred_at'] or '').replace(' ', 'T')[:16]
+    completed_at_val = (fault['completed_at'] or '').replace(' ', 'T')[:16]
     return render_template('fault/edit.html',
                            fault=fault, parts=parts,
                            fault_photos=fault_photos, action_photos=action_photos,
@@ -1132,6 +1722,7 @@ def fault_edit(fault_id):
                            parts_list=PARTS, statuses=STATUSES, workers=workers,
                            selected_symptoms=selected_symptoms,
                            occurred_at_val=occurred_at_val,
+                           completed_at_val=completed_at_val,
                            today=date.today().isoformat())
 
 
@@ -1167,13 +1758,1012 @@ def fault_delete(fault_id):
 
 
 # ──────────────────────────────────────────────
+# 생산 LOT / 설비가동률
+# ──────────────────────────────────────────────
+@app.route('/production', methods=['GET', 'POST'])
+def production_list():
+    db = get_db()
+    if request.method == 'POST':
+        if not session.get('edit_authorized'):
+            flash('LOT 등록은 로그인 후 이용해 주세요.', 'danger')
+            db.close()
+            return redirect(url_for('login', next=url_for('production_list')))
+        model_name = request.form.get('model_name', '').strip()
+        lot_number = request.form.get('lot_number', '').strip()
+        if not model_name or not lot_number:
+            flash('모델명과 LOT번호를 입력해 주세요.', 'danger')
+            db.close()
+            return redirect(url_for('production_list'))
+        created_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        cur = db.execute(
+            "INSERT INTO production_lots (model_name,lot_number,started_at,status,started_by) VALUES (?,?,?,?,?)",
+            (model_name, lot_number, created_at, '진행중', session.get('actor_name'))
+        )
+        db.commit()
+        log_action('LOT 등록', 'production_lot', cur.lastrowid, f'{model_name} / {lot_number}')
+        db.close()
+        flash(f'LOT을 등록했습니다: {model_name} / {lot_number}. 각 섹션에서 가동을 시작해 주세요.', 'success')
+        return redirect(url_for('production_detail', lot_id=cur.lastrowid))
+
+    lots = [dict(r) for r in db.execute(
+        "SELECT * FROM production_lots ORDER BY created_at DESC LIMIT 100"
+    ).fetchall()]
+    for lot in lots:
+        agg = db.execute("""
+            SELECT AVG(uptime_rate) as avg_rate, COUNT(*) as n
+            FROM production_lot_sections WHERE lot_id=? AND status='완료'
+        """, (lot['id'],)).fetchone()
+        lot['avg_uptime_rate'] = round(agg['avg_rate'], 1) if agg['avg_rate'] is not None else None
+        lot['completed_sections'] = agg['n']
+
+    recent_models = [r['model_name'] for r in db.execute("""
+        SELECT model_name, MAX(created_at) as latest
+        FROM production_lots GROUP BY model_name ORDER BY latest DESC LIMIT 50
+    """).fetchall()]
+    db.close()
+    return render_template('production/list.html', lots=lots, recent_models=recent_models)
+
+
+def _compute_section_analysis(db):
+    """섹션(SECTIONS) 기준으로 전체 LOT을 가로질러 집계한 가동률 통계.
+    완료 여부와 무관하게 모든 가동구간을 포함하며, 진행중인 구간은 현재 시점까지 실시간 계산한다."""
+    all_ls = db.execute("""
+        SELECT ls.*, l.model_name, l.lot_number
+        FROM production_lot_sections ls
+        JOIN production_lots l ON ls.lot_id = l.id
+        ORDER BY ls.id
+    """).fetchall()
+
+    by_section = {s: [] for s in SECTIONS}
+    detail_rows = []
+    for ls in all_ls:
+        stats = compute_section_stats(db, ls['id'], lot_section_row=ls)
+        entry = {
+            'model_name': ls['model_name'], 'lot_number': ls['lot_number'],
+            'status': ls['status'], 'started_at': ls['started_at'], 'ended_at': ls['ended_at'],
+            'uptime_rate': stats['uptime_rate'], 'fault_seconds': stats['fault_seconds'],
+            'fault_count': stats['fault_count'], 'pause_downtime_seconds': stats['pause_downtime_seconds'],
+        }
+        by_section.setdefault(ls['section'], []).append(entry)
+        detail_rows.append({'section': ls['section'], **entry})
+
+    summary = []
+    for section in SECTIONS:
+        rows = by_section.get(section, [])
+        if rows:
+            avg_uptime = round(sum(r['uptime_rate'] for r in rows) / len(rows), 1)
+            total_fault_min = sum(r['fault_seconds'] for r in rows) // 60
+            total_downtime_min = sum(r['pause_downtime_seconds'] for r in rows) // 60
+            total_fault_count = sum(r['fault_count'] for r in rows)
+        else:
+            avg_uptime = None
+            total_fault_min = total_downtime_min = total_fault_count = 0
+        summary.append({
+            'section': section, 'lot_section_count': len(rows), 'avg_uptime_rate': avg_uptime,
+            'total_fault_minutes': total_fault_min, 'total_downtime_minutes': total_downtime_min,
+            'total_fault_count': total_fault_count,
+        })
+    return summary, detail_rows
+
+
+@app.route('/production/analysis')
+def production_analysis():
+    db = get_db()
+    summary, detail_rows = _compute_section_analysis(db)
+    db.close()
+    return render_template('production/analysis.html', summary=summary, detail_rows=detail_rows)
+
+
+@app.route('/production/analysis/export')
+def production_analysis_export():
+    if not session.get('edit_authorized'):
+        flash('엑셀 내보내기는 로그인 후 이용해 주세요.', 'danger')
+        return redirect(url_for('login', next=url_for('production_analysis')))
+
+    db = get_db()
+    summary, detail_rows = _compute_section_analysis(db)
+    db.close()
+
+    report_title = '섹션별 가동률 분석 리포트'
+    subtitle = f'집계 대상: {len(summary)}개 섹션 · {len(detail_rows)}개 가동구간 (전체 LOT 대상)'
+    NCOL = 8
+    wb = openpyxl.Workbook()
+    ws = xlsx_new_sheet(wb, '섹션별_가동률_분석', first=True)
+    row = xlsx_title_block(ws, NCOL, report_title, subtitle)
+
+    rates = [r['avg_uptime_rate'] for r in summary if r['avg_uptime_rate'] is not None]
+    overall_rate = round(sum(rates) / len(rates), 1) if rates else None
+    total_faults = sum(r['total_fault_count'] for r in summary)
+    total_downtime = sum(r['total_downtime_minutes'] for r in summary)
+    total_sections = sum(r['lot_section_count'] for r in summary)
+    row = xlsx_kpi_cards(ws, row, NCOL, [
+        ('전체 평균가동률', f'{overall_rate}%' if overall_rate is not None else '-',
+         _XLSX_COLOR_SUCCESS if (overall_rate is not None and overall_rate >= 95) else
+         _XLSX_COLOR_WARNING if (overall_rate is not None and overall_rate >= 85) else
+         (_XLSX_COLOR_DANGER if overall_rate is not None else None)),
+        ('총 가동구간수', f'{total_sections}건', None),
+        ('총 고장건수', f'{total_faults}건', _XLSX_COLOR_DANGER if total_faults else None),
+        ('총 정지시간', f'{total_downtime}분', _XLSX_COLOR_WARNING if total_downtime else None),
+    ])
+
+    row = xlsx_block_heading(ws, row, NCOL, '섹션별 요약')
+    summary_rows, fills, point_colors = [], [], []
+    for r in summary:
+        rate = r['avg_uptime_rate']
+        fills.append('E8F5E9' if (rate is not None and rate >= 95) else
+                     ('FFFDE0' if (rate is not None and rate >= 85) else 'FFE0E0') if rate is not None else None)
+        point_colors.append(
+            _XLSX_COLOR_SUCCESS if (rate is not None and rate >= 95) else
+            _XLSX_COLOR_WARNING if (rate is not None and rate >= 85) else
+            _XLSX_COLOR_DANGER
+        )
+        summary_rows.append([
+            r['section'], r['lot_section_count'], rate if rate is not None else '',
+            r['total_fault_minutes'], r['total_fault_count'], r['total_downtime_minutes'],
+        ])
+    hdr1, last1, row = xlsx_table_at(ws, row,
+        ['섹션', '가동구간수', '평균가동률(%)', '총고장시간(분)', '총고장건수', '총정지시간(분)'],
+        [14, 12, 14, 14, 12, 14], summary_rows, percent_cols=[3], fill_colors=fills, total_cols=NCOL)
+    chart_end1 = xlsx_bar_chart(ws, '섹션별 평균가동률(%)', cat_col=1, data_cols=[3], header_row=hdr1, last_data_row=last1,
+                   start_col=1, anchor_row=row, x_title='섹션', y_title='%', y_percent=True,
+                   point_colors=point_colors, num_cols=NCOL)
+    row = chart_end1 + 2
+    chart_end2 = xlsx_bar_chart(ws, '섹션별 총고장/총정지 시간(분)', cat_col=1, data_cols=[4, 6], header_row=hdr1, last_data_row=last1,
+                   start_col=1, anchor_row=row, x_title='섹션',
+                   series_colors=[_XLSX_COLOR_DANGER, _XLSX_COLOR_WARNING], num_cols=NCOL)
+    row = chart_end2 + 2
+
+    row = xlsx_block_heading(ws, row, NCOL, f'섹션별 상세 ({len(detail_rows)}개 가동구간, LOT별)')
+    detail_table_rows = [[
+        r['section'], r['model_name'], r['lot_number'], r['status'],
+        r['started_at'], r['ended_at'] or '(진행중)', r['uptime_rate'], r['fault_count'],
+    ] for r in detail_rows]
+    xlsx_table_at(ws, row, ['섹션', '모델명', 'LOT번호', '상태', '시작', '종료', '가동률(%)', '고장건수'],
+                  [12, 16, 14, 10, 18, 18, 12, 10], detail_table_rows, percent_cols=[7], total_cols=NCOL)
+
+    xlsx_finalize_report_sheet(ws, report_title=report_title, tab_color='1F4E79', freeze_row=3)
+
+    log_action('엑셀 내보내기', 'production_analysis', 0, '섹션별 가동률 분석')
+    return xlsx_response(wb, '섹션별_가동률_분석')
+
+
+@app.route('/production/export')
+def production_export():
+    """생산LOT 설비가동률 종합 리포트. 진행중인 LOT도 현재 시점까지 실시간 계산해서 포함한다."""
+    if not session.get('edit_authorized'):
+        flash('엑셀 내보내기는 로그인 후 이용해 주세요.', 'danger')
+        return redirect(url_for('login', next=url_for('production_list')))
+
+    db = get_db()
+    lots = db.execute("SELECT * FROM production_lots ORDER BY created_at DESC").fetchall()
+    faults = db.execute("""
+        SELECT f.*, l.model_name, l.lot_number, ls.section as ls_section
+        FROM fault_history f
+        JOIN production_lots l ON f.lot_id = l.id
+        LEFT JOIN production_lot_sections ls ON f.lot_section_id = ls.id
+        ORDER BY f.occurred_at DESC
+    """).fetchall()
+    pauses = db.execute("""
+        SELECT p.*, ls.section, l.model_name, l.lot_number
+        FROM production_lot_section_pauses p
+        JOIN production_lot_sections ls ON p.lot_section_id = ls.id
+        JOIN production_lots l ON ls.lot_id = l.id
+        ORDER BY p.paused_at DESC
+    """).fetchall()
+
+    report_title = '생산LOT 설비가동률 종합 리포트'
+    subtitle = f'집계 대상: {len(lots)}개 LOT · 고장 {len(faults)}건 · 가동정지 {len(pauses)}건'
+    NCOL = 10
+    wb = openpyxl.Workbook()
+    ws = xlsx_new_sheet(wb, '생산LOT_가동률', first=True)
+    row = xlsx_title_block(ws, NCOL, report_title, subtitle)
+
+    lot_rows, point_colors = [], []
+    for i, lot in enumerate(lots, 1):
+        agg = db.execute("""
+            SELECT AVG(uptime_rate) as avg_rate, COUNT(*) as n
+            FROM production_lot_sections WHERE lot_id=? AND status='완료'
+        """, (lot['id'],)).fetchone()
+        avg_rate = round(agg['avg_rate'], 1) if agg['avg_rate'] is not None else ''
+        point_colors.append(
+            _XLSX_COLOR_SUCCESS if (isinstance(avg_rate, (int, float)) and avg_rate >= 95) else
+            _XLSX_COLOR_WARNING if (isinstance(avg_rate, (int, float)) and avg_rate >= 85) else
+            _XLSX_COLOR_DANGER
+        )
+        lot_rows.append([i, lot['model_name'], lot['lot_number'], lot['status'],
+                         lot['started_at'], lot['ended_at'] or '', avg_rate, agg['n']])
+
+    def _dur_minutes(start_s, end_s):
+        if not end_s:
+            return None
+        return max(0, int((_parse_dt(end_s) - _parse_dt(start_s)).total_seconds() // 60))
+
+    overall_rates = [r[6] for r in lot_rows if isinstance(r[6], (int, float))]
+    overall_rate = round(sum(overall_rates) / len(overall_rates), 1) if overall_rates else None
+    fault_durations = [d for d in (_dur_minutes(f['occurred_at'], f['completed_at']) for f in faults) if d is not None]
+    pause_durations = [d for d in (_dur_minutes(p['paused_at'], p['resumed_at']) for p in pauses) if d is not None]
+    mttr = round(sum(fault_durations) / len(fault_durations), 1) if fault_durations else None
+    total_downtime = sum(pause_durations)
+    row = xlsx_kpi_cards(ws, row, NCOL, [
+        ('전체 평균가동률', f'{overall_rate}%' if overall_rate is not None else '-',
+         _XLSX_COLOR_SUCCESS if (overall_rate is not None and overall_rate >= 95) else
+         _XLSX_COLOR_WARNING if (overall_rate is not None and overall_rate >= 85) else
+         (_XLSX_COLOR_DANGER if overall_rate is not None else None)),
+        ('총 고장건수', f'{len(faults)}건', _XLSX_COLOR_DANGER if faults else None),
+        ('총 정지시간', f'{total_downtime}분', _XLSX_COLOR_WARNING if total_downtime else None),
+        ('평균 조치시간(MTTR)', f'{mttr}분' if mttr is not None else '-', None),
+    ])
+
+    row = xlsx_block_heading(ws, row, NCOL, 'LOT 요약')
+    hdr1, last1, row = xlsx_table_at(ws, row,
+        ['No', '모델명', 'LOT번호', '상태', '시작', '종료', '평균가동률(%)', '완료섹션수'],
+        [5, 16, 14, 10, 18, 18, 14, 12], lot_rows, percent_cols=[7], total_cols=NCOL)
+    chart_end = xlsx_bar_chart(ws, 'LOT별 평균가동률(%)', cat_col=3, data_cols=[7], header_row=hdr1, last_data_row=last1,
+                   start_col=1, anchor_row=row, x_title='LOT번호', y_title='%', y_percent=True,
+                   point_colors=point_colors, num_cols=NCOL)
+    row = chart_end + 2
+
+    row = xlsx_block_heading(ws, row, NCOL, '섹션별 상세 (LOT × 섹션)')
+    section_rows, section_fills = [], []
+    for lot in lots:
+        sections = db.execute(
+            "SELECT * FROM production_lot_sections WHERE lot_id=? ORDER BY id", (lot['id'],)
+        ).fetchall()
+        for ls in sections:
+            stats = compute_section_stats(db, ls['id'], lot_section_row=ls)
+            section_fills.append('E8F5E9' if stats['uptime_rate'] >= 95 else ('FFFDE0' if stats['uptime_rate'] >= 85 else 'FFE0E0'))
+            section_rows.append([
+                lot['model_name'], lot['lot_number'], ls['section'], ls['status'],
+                ls['started_at'], ls['ended_at'] or '(진행중)',
+                stats['available_seconds'] // 60, stats['fault_seconds'] // 60,
+                stats['pause_downtime_seconds'] // 60, stats['uptime_rate'],
+            ])
+    _, _, row = xlsx_table_at(ws, row,
+        ['모델명', 'LOT번호', '섹션', '상태', '시작', '종료', '가동대상(분)', '고장(분)', '정지-다운타임(분)', '가동률(%)'],
+        [16, 14, 12, 10, 18, 18, 12, 10, 16, 12], section_rows, percent_cols=[10], fill_colors=section_fills,
+        total_cols=NCOL)
+    row += 1
+
+    row = xlsx_block_heading(ws, row, NCOL, f'고장 내역 ({len(faults)}건) — 발생원인 · 조치시간')
+    fault_rows = []
+    for f in faults:
+        occ = _parse_dt(f['occurred_at'])
+        comp = _parse_dt(f['completed_at']) if f['completed_at'] else None
+        duration = int((comp - occ).total_seconds() // 60) if comp else ''
+        fault_rows.append([
+            f['model_name'], f['lot_number'], f['ls_section'] or f['section'],
+            f['occurred_at'], f['completed_at'] or '(미완료)', duration,
+            f['symptom'] or '', f['cause'] or '', f['worker'] or '',
+        ])
+    hdr3, last3, row = xlsx_table_at(ws, row,
+        ['모델명', 'LOT번호', '섹션', '발생시각', '완료시각', '조치시간(분)', '증상', '원인', '작업자'],
+        [16, 14, 12, 18, 18, 12, 20, 25, 10], fault_rows, total_cols=NCOL)
+    if fault_rows:
+        _, row = xlsx_total_row(ws, hdr3 + 1, last3, label_col=1, label=f'합계 ({len(fault_rows)}건)', value_cols=[6])
+    row += 1
+
+    row = xlsx_block_heading(ws, row, NCOL, f'가동정지 내역 ({len(pauses)}건) — 정지시간 · 정지사유')
+    pause_rows = []
+    for p in pauses:
+        paused = _parse_dt(p['paused_at'])
+        resumed = _parse_dt(p['resumed_at']) if p['resumed_at'] else None
+        duration = int((resumed - paused).total_seconds() // 60) if resumed else ''
+        pause_rows.append([
+            p['model_name'], p['lot_number'], p['section'],
+            p['paused_at'], p['resumed_at'] or '(정지중)', duration, p['reason'] or '퇴근',
+        ])
+    hdr4, last4, row = xlsx_table_at(ws, row,
+        ['모델명', 'LOT번호', '섹션', '정지시각', '재개시각', '정지시간(분)', '사유'],
+        [16, 14, 12, 18, 18, 12, 14], pause_rows, total_cols=NCOL)
+    if pause_rows:
+        xlsx_total_row(ws, hdr4 + 1, last4, label_col=1, label=f'합계 ({len(pause_rows)}건)', value_cols=[6])
+
+    xlsx_finalize_report_sheet(ws, report_title=report_title, tab_color='1F4E79', freeze_row=3)
+
+    db.close()
+    log_action('엑셀 내보내기', 'production_lot', 0, f'생산LOT 가동률 종합 리포트 ({len(lots)}건)')
+    return xlsx_response(wb, '생산LOT_가동률')
+
+
+@app.route('/production/<int:lot_id>')
+def production_detail(lot_id):
+    db = get_db()
+    lot = db.execute("SELECT * FROM production_lots WHERE id=?", (lot_id,)).fetchone()
+    if not lot:
+        db.close()
+        abort(404)
+
+    existing = {r['section']: dict(r) for r in db.execute(
+        "SELECT * FROM production_lot_sections WHERE lot_id=? ORDER BY id", (lot_id,)
+    ).fetchall()}
+
+    section_rows = []
+    for section in SECTIONS:
+        ls = existing.get(section)
+        if ls:
+            if ls['status'] in ('진행중', '일시정지'):
+                preview = compute_section_stats(db, ls['id'], lot_section_row=ls)
+                ls['uptime_rate'] = preview['uptime_rate']
+                ls['available_seconds'] = preview['available_seconds']
+                ls['fault_seconds'] = preview['fault_seconds']
+                ls['fault_count'] = preview['fault_count']
+            start_dt = _parse_dt(ls['started_at'])
+            end_dt = _parse_dt(ls['ended_at']) if ls['ended_at'] else datetime.now()
+            ls['elapsed_days'] = (end_dt.date() - start_dt.date()).days + 1
+            section_rows.append(ls)
+        else:
+            section_rows.append({'section': section, 'status': '대기'})
+    db.close()
+    return render_template('production/detail.html', lot=lot, section_rows=section_rows, pause_reasons=PAUSE_REASONS)
+
+
+@app.route('/production/<int:lot_id>/export')
+def production_lot_export(lot_id):
+    """LOT 하나의 섹션별 가동률 + 고장/정지 내역 리포트. 진행중인 섹션도 현재 시점까지 실시간 계산."""
+    if not session.get('edit_authorized'):
+        flash('엑셀 내보내기는 로그인 후 이용해 주세요.', 'danger')
+        return redirect(url_for('login', next=url_for('production_detail', lot_id=lot_id)))
+
+    db = get_db()
+    lot = db.execute("SELECT * FROM production_lots WHERE id=?", (lot_id,)).fetchone()
+    if not lot:
+        db.close()
+        abort(404)
+
+    sections = db.execute(
+        "SELECT * FROM production_lot_sections WHERE lot_id=? ORDER BY id", (lot_id,)
+    ).fetchall()
+
+    faults = db.execute("""
+        SELECT f.*, ls.section as ls_section
+        FROM fault_history f
+        LEFT JOIN production_lot_sections ls ON f.lot_section_id = ls.id
+        WHERE f.lot_id = ?
+        ORDER BY f.occurred_at DESC
+    """, (lot_id,)).fetchall()
+    pauses = db.execute("""
+        SELECT p.*, ls.section
+        FROM production_lot_section_pauses p
+        JOIN production_lot_sections ls ON p.lot_section_id = ls.id
+        WHERE ls.lot_id = ?
+        ORDER BY p.paused_at DESC
+    """, (lot_id,)).fetchall()
+
+    report_title = f"생산LOT 가동률 리포트 — {lot['model_name']} / {lot['lot_number']}"
+    subtitle = (f"모델명: {lot['model_name']}    LOT번호: {lot['lot_number']}    상태: {lot['status']}    "
+                f"기간: {lot['started_at']} ~ {lot['ended_at'] or '진행중'}")
+    NCOL = 9
+    wb = openpyxl.Workbook()
+    ws = xlsx_new_sheet(wb, f"{lot['model_name']}_{lot['lot_number']}", first=True)
+    row = xlsx_title_block(ws, NCOL, report_title, subtitle)
+
+    section_rows, point_colors, fills = [], [], []
+    for ls in sections:
+        stats = compute_section_stats(db, ls['id'], lot_section_row=ls)
+        rate = stats['uptime_rate']
+        fills.append('E8F5E9' if rate >= 95 else ('FFFDE0' if rate >= 85 else 'FFE0E0'))
+        point_colors.append(_XLSX_COLOR_SUCCESS if rate >= 95 else (_XLSX_COLOR_WARNING if rate >= 85 else _XLSX_COLOR_DANGER))
+        section_rows.append([
+            ls['section'], ls['status'], ls['started_at'], ls['ended_at'] or '(진행중)',
+            stats['available_seconds'] // 60, stats['fault_seconds'] // 60,
+            stats['pause_downtime_seconds'] // 60, rate, stats['fault_count'],
+        ])
+    db.close()
+
+    def _dur_minutes(start_s, end_s):
+        if not end_s:
+            return None
+        return max(0, int((_parse_dt(end_s) - _parse_dt(start_s)).total_seconds() // 60))
+
+    lot_rate = round(sum(r[7] for r in section_rows) / len(section_rows), 1) if section_rows else None
+    fault_durations = [d for d in (_dur_minutes(f['occurred_at'], f['completed_at']) for f in faults) if d is not None]
+    pause_durations = [d for d in (_dur_minutes(p['paused_at'], p['resumed_at']) for p in pauses) if d is not None]
+    mttr = round(sum(fault_durations) / len(fault_durations), 1) if fault_durations else None
+    total_downtime = sum(pause_durations)
+    row = xlsx_kpi_cards(ws, row, NCOL, [
+        ('이 LOT 평균가동률', f'{lot_rate}%' if lot_rate is not None else '-',
+         _XLSX_COLOR_SUCCESS if (lot_rate is not None and lot_rate >= 95) else
+         _XLSX_COLOR_WARNING if (lot_rate is not None and lot_rate >= 85) else
+         (_XLSX_COLOR_DANGER if lot_rate is not None else None)),
+        ('총 고장건수', f'{len(faults)}건', _XLSX_COLOR_DANGER if faults else None),
+        ('총 정지시간', f'{total_downtime}분', _XLSX_COLOR_WARNING if total_downtime else None),
+        ('평균 조치시간(MTTR)', f'{mttr}분' if mttr is not None else '-', None),
+    ])
+
+    row = xlsx_block_heading(ws, row, NCOL, '섹션별 가동률 요약')
+    hdr1, last1, row = xlsx_table_at(ws, row,
+        ['섹션', '상태', '시작', '종료', '가동대상(분)', '고장(분)', '정지-다운타임(분)', '가동률(%)', '고장건수'],
+        [12, 10, 18, 18, 12, 10, 16, 12, 10], section_rows, percent_cols=[8], fill_colors=fills, total_cols=NCOL)
+    chart_end1 = xlsx_bar_chart(ws, '섹션별 가동률(%)', cat_col=1, data_cols=[8], header_row=hdr1, last_data_row=last1,
+                   start_col=1, anchor_row=row, x_title='섹션', y_title='%', y_percent=True,
+                   point_colors=point_colors, num_cols=NCOL)
+    row = chart_end1 + 2
+    chart_end2 = xlsx_bar_chart(ws, '섹션별 고장/정지 시간(분)', cat_col=1, data_cols=[6, 7], header_row=hdr1, last_data_row=last1,
+                   start_col=1, anchor_row=row, x_title='섹션',
+                   series_colors=[_XLSX_COLOR_DANGER, _XLSX_COLOR_WARNING], num_cols=NCOL)
+    row = chart_end2 + 2
+
+    row = xlsx_block_heading(ws, row, NCOL, f'고장 내역 ({len(faults)}건) — 발생원인 · 조치시간')
+    fault_rows = []
+    for f in faults:
+        occ = _parse_dt(f['occurred_at'])
+        comp = _parse_dt(f['completed_at']) if f['completed_at'] else None
+        duration = int((comp - occ).total_seconds() // 60) if comp else ''
+        fault_rows.append([
+            f['ls_section'] or f['section'], f['occurred_at'], f['completed_at'] or '(미완료)',
+            duration, f['symptom'] or '', f['cause'] or '', f['worker'] or '',
+        ])
+    hdr2, last2, row = xlsx_table_at(ws, row,
+        ['섹션', '발생시각', '완료시각', '조치시간(분)', '증상', '원인', '작업자'],
+        [12, 18, 18, 12, 20, 25, 10], fault_rows, total_cols=NCOL)
+    if fault_rows:
+        _, row = xlsx_total_row(ws, hdr2 + 1, last2, label_col=1, label=f'합계 ({len(fault_rows)}건)', value_cols=[4])
+    row += 1
+
+    row = xlsx_block_heading(ws, row, NCOL, f'가동정지 내역 ({len(pauses)}건) — 정지시간 · 정지사유')
+    pause_rows = []
+    for p in pauses:
+        paused = _parse_dt(p['paused_at'])
+        resumed = _parse_dt(p['resumed_at']) if p['resumed_at'] else None
+        duration = int((resumed - paused).total_seconds() // 60) if resumed else ''
+        pause_rows.append([p['section'], p['paused_at'], p['resumed_at'] or '(정지중)', duration, p['reason'] or '퇴근'])
+    hdr3, last3, row = xlsx_table_at(ws, row, ['섹션', '정지시각', '재개시각', '정지시간(분)', '사유'],
+                                      [12, 18, 18, 12, 14], pause_rows, total_cols=NCOL)
+    if pause_rows:
+        xlsx_total_row(ws, hdr3 + 1, last3, label_col=1, label=f'합계 ({len(pause_rows)}건)', value_cols=[4])
+
+    xlsx_finalize_report_sheet(ws, report_title=report_title, tab_color='1F4E79', freeze_row=3)
+
+    log_action('엑셀 내보내기', 'production_lot', lot_id, f"{lot['model_name']} / {lot['lot_number']}")
+    return xlsx_response(wb, f"{lot['model_name']}_{lot['lot_number']}_가동률")
+
+
+@app.route('/production/<int:lot_id>/sections/start-all', methods=['POST'])
+def production_sections_start_all(lot_id):
+    if not session.get('edit_authorized'):
+        flash('가동 시작은 로그인 후 이용해 주세요.', 'danger')
+        return redirect(url_for('login', next=url_for('production_detail', lot_id=lot_id)))
+
+    db = get_db()
+    lot = db.execute("SELECT * FROM production_lots WHERE id=?", (lot_id,)).fetchone()
+    if not lot:
+        db.close()
+        abort(404)
+
+    busy_sections = {r['section'] for r in db.execute(
+        "SELECT section FROM production_lot_sections WHERE status IN ('진행중','일시정지')"
+    ).fetchall()}
+    already_used = {r['section'] for r in db.execute(
+        "SELECT section FROM production_lot_sections WHERE lot_id=?", (lot_id,)
+    ).fetchall()}
+    to_start = [s for s in SECTIONS if s not in busy_sections and s not in already_used]
+
+    started_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    started = []
+    skipped = []
+    for section in to_start:
+        try:
+            db.execute(
+                "INSERT INTO production_lot_sections (lot_id,section,started_at,status) VALUES (?,?,?,?)",
+                (lot_id, section, started_at, '진행중')
+            )
+            started.append(section)
+        except sqlite3.IntegrityError:
+            # 동시 요청으로 이미 다른 곳에서 시작된 섹션 (DB 유니크 제약이 최종 방어)
+            skipped.append(section)
+    db.commit()
+    if started:
+        log_action('섹션 일괄시작', 'production_lot', lot_id, ', '.join(started))
+        msg = f"{len(started)}개 섹션의 가동을 시작했습니다 ({', '.join(started)})."
+        if skipped:
+            msg += f" (동시에 시작되어 건너뜀: {', '.join(skipped)})"
+        flash(msg, 'success')
+    else:
+        flash('시작할 수 있는 섹션이 없습니다 (이미 모두 진행중이거나 이 LOT에서 사용된 섹션입니다).', 'warning')
+    db.close()
+    return redirect(url_for('production_detail', lot_id=lot_id))
+
+
+@app.route('/production/<int:lot_id>/sections/pause-all', methods=['POST'])
+def production_sections_pause_all(lot_id):
+    if not session.get('edit_authorized'):
+        flash('가동 정지는 로그인 후 이용해 주세요.', 'danger')
+        return redirect(url_for('login', next=url_for('production_detail', lot_id=lot_id)))
+
+    db = get_db()
+    reason_sel = request.form.get('reason', '').strip()
+    reason_custom = request.form.get('reason_custom', '').strip()
+    reason = (reason_custom if reason_sel == '기타' else reason_sel) or '퇴근'
+
+    running = db.execute(
+        "SELECT * FROM production_lot_sections WHERE lot_id=? AND status='진행중'", (lot_id,)
+    ).fetchall()
+    paused_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    for ls in running:
+        db.execute(
+            "INSERT INTO production_lot_section_pauses (lot_section_id, paused_at, reason) VALUES (?,?,?)",
+            (ls['id'], paused_at, reason)
+        )
+        db.execute("UPDATE production_lot_sections SET status='일시정지' WHERE id=?", (ls['id'],))
+    db.commit()
+    sections = [r['section'] for r in running]
+    if sections:
+        log_action('섹션 일괄정지', 'production_lot', lot_id, f"{', '.join(sections)} ({reason})")
+        flash(f"{len(sections)}개 섹션의 가동을 정지했습니다 ({', '.join(sections)}).", 'success')
+    else:
+        flash('정지할 진행중인 섹션이 없습니다.', 'warning')
+    db.close()
+    return redirect(url_for('production_detail', lot_id=lot_id))
+
+
+@app.route('/production/<int:lot_id>/section/<section>/start', methods=['POST'])
+def production_section_start(lot_id, section):
+    if not session.get('edit_authorized'):
+        flash('가동 시작은 로그인 후 이용해 주세요.', 'danger')
+        return redirect(url_for('login', next=url_for('production_detail', lot_id=lot_id)))
+    if section not in SECTIONS:
+        abort(404)
+
+    db = get_db()
+    lot = db.execute("SELECT * FROM production_lots WHERE id=?", (lot_id,)).fetchone()
+    if not lot:
+        db.close()
+        abort(404)
+    if db.execute(
+        "SELECT id FROM production_lot_sections WHERE section=? AND status IN ('진행중','일시정지')", (section,)
+    ).fetchone():
+        db.close()
+        flash(f'{section}은(는) 이미 다른 가동(또는 정지 중인 가동)이 있습니다.', 'danger')
+        return redirect(url_for('production_detail', lot_id=lot_id))
+
+    started_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    try:
+        db.execute(
+            "INSERT INTO production_lot_sections (lot_id,section,started_at,status) VALUES (?,?,?,?)",
+            (lot_id, section, started_at, '진행중')
+        )
+        db.commit()
+    except sqlite3.IntegrityError:
+        # 동시 요청으로 이미 다른 곳에서 이 섹션을 시작시킨 경우 (DB 유니크 제약이 최종 방어)
+        db.close()
+        flash(f'{section}은(는) 방금 다른 곳에서 이미 가동이 시작되었습니다.', 'danger')
+        return redirect(url_for('production_detail', lot_id=lot_id))
+    log_action('섹션 가동시작', 'production_lot', lot_id, f"{section} / {lot['model_name']} {lot['lot_number']}")
+    db.close()
+    flash(f'{section} 가동을 시작했습니다.', 'success')
+    return redirect(url_for('production_detail', lot_id=lot_id))
+
+
+@app.route('/production/<int:lot_id>/section/<section>/pause', methods=['POST'])
+def production_section_pause(lot_id, section):
+    if not session.get('edit_authorized'):
+        flash('가동 정지는 로그인 후 이용해 주세요.', 'danger')
+        return redirect(url_for('login', next=url_for('production_detail', lot_id=lot_id)))
+
+    db = get_db()
+    ls = db.execute(
+        "SELECT * FROM production_lot_sections WHERE lot_id=? AND section=? AND status='진행중'",
+        (lot_id, section)
+    ).fetchone()
+    if not ls:
+        db.close()
+        flash('진행중인 가동 구간을 찾을 수 없습니다.', 'danger')
+        return redirect(url_for('production_detail', lot_id=lot_id))
+
+    reason_sel = request.form.get('reason', '').strip()
+    reason_custom = request.form.get('reason_custom', '').strip()
+    reason = reason_custom if reason_sel == '기타' else reason_sel
+    reason = reason or '퇴근'
+
+    paused_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    db.execute(
+        "INSERT INTO production_lot_section_pauses (lot_section_id, paused_at, reason) VALUES (?,?,?)",
+        (ls['id'], paused_at, reason)
+    )
+    db.execute("UPDATE production_lot_sections SET status='일시정지' WHERE id=?", (ls['id'],))
+    db.commit()
+    log_action('섹션 가동정지', 'production_lot', lot_id, f"{section} ({reason})")
+    db.close()
+    flash(f'{section} 가동을 정지했습니다. (다음 출근 시 재개하세요)', 'success')
+    return redirect(url_for('production_detail', lot_id=lot_id))
+
+
+@app.route('/production/<int:lot_id>/section/<section>/resume', methods=['POST'])
+def production_section_resume(lot_id, section):
+    if not session.get('edit_authorized'):
+        flash('가동 재개는 로그인 후 이용해 주세요.', 'danger')
+        return redirect(url_for('login', next=url_for('production_detail', lot_id=lot_id)))
+
+    db = get_db()
+    ls = db.execute(
+        "SELECT * FROM production_lot_sections WHERE lot_id=? AND section=? AND status='일시정지'",
+        (lot_id, section)
+    ).fetchone()
+    if not ls:
+        db.close()
+        flash('정지중인 가동 구간을 찾을 수 없습니다.', 'danger')
+        return redirect(url_for('production_detail', lot_id=lot_id))
+
+    resumed_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    db.execute(
+        "UPDATE production_lot_section_pauses SET resumed_at=? WHERE lot_section_id=? AND resumed_at IS NULL",
+        (resumed_at, ls['id'])
+    )
+    db.execute("UPDATE production_lot_sections SET status='진행중' WHERE id=?", (ls['id'],))
+    db.commit()
+    log_action('섹션 가동재개', 'production_lot', lot_id, f"{section}")
+    db.close()
+    flash(f'{section} 가동을 재개했습니다.', 'success')
+    return redirect(url_for('production_detail', lot_id=lot_id))
+
+
+@app.route('/production/<int:lot_id>/section/<section>/end', methods=['POST'])
+def production_section_end(lot_id, section):
+    if not session.get('edit_authorized'):
+        flash('가동 종료는 로그인 후 이용해 주세요.', 'danger')
+        return redirect(url_for('login', next=url_for('production_detail', lot_id=lot_id)))
+
+    db = get_db()
+    ls = db.execute(
+        "SELECT * FROM production_lot_sections WHERE lot_id=? AND section=? AND status IN ('진행중','일시정지')",
+        (lot_id, section)
+    ).fetchone()
+    if not ls:
+        db.close()
+        flash('진행중인 가동 구간을 찾을 수 없습니다.', 'danger')
+        return redirect(url_for('production_detail', lot_id=lot_id))
+
+    ended_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    db.execute(
+        "UPDATE production_lot_section_pauses SET resumed_at=? WHERE lot_section_id=? AND resumed_at IS NULL",
+        (ended_at, ls['id'])
+    )
+    ls_dict = dict(ls)
+    ls_dict['ended_at'] = ended_at
+    stats = compute_section_stats(db, ls['id'], lot_section_row=ls_dict)
+    db.execute("""
+        UPDATE production_lot_sections
+        SET ended_at=?, status='완료', available_seconds=?, fault_seconds=?, fault_count=?,
+            pause_downtime_seconds=?, uptime_rate=?
+        WHERE id=?
+    """, (ended_at, stats['available_seconds'], stats['fault_seconds'], stats['fault_count'],
+          stats['pause_downtime_seconds'], stats['uptime_rate'], ls['id']))
+    db.commit()
+    log_action('섹션 가동종료', 'production_lot', lot_id, f"{section} / 가동률 {stats['uptime_rate']}%")
+    db.close()
+    flash(f"{section} 가동을 종료했습니다. (가동률 {stats['uptime_rate']}%)", 'success')
+    return redirect(url_for('production_detail', lot_id=lot_id))
+
+
+def _serialize_timeline(db, ls):
+    win_start = _parse_dt(ls['started_at'])
+    win_end = _parse_dt(ls['ended_at']) if ls['ended_at'] else datetime.now()
+    total = max(1.0, (win_end - win_start).total_seconds())
+    segments = compute_section_timeline(db, ls)
+    seg_out = []
+    for s in segments:
+        dur = (s['end'] - s['start']).total_seconds()
+        seg_out.append({
+            'type': s['type'],
+            'start': s['start'].strftime('%Y-%m-%d %H:%M:%S'),
+            'end': s['end'].strftime('%Y-%m-%d %H:%M:%S'),
+            'label': s['label'],
+            'duration_seconds': int(dur),
+            'pct': round(dur / total * 100, 3),
+        })
+    return {
+        'window_start': win_start.strftime('%Y-%m-%d %H:%M:%S'),
+        'window_end': win_end.strftime('%Y-%m-%d %H:%M:%S'),
+        'segments': seg_out,
+    }
+
+
+@app.route('/production/<int:lot_id>/section/<section>')
+def production_section_detail(lot_id, section):
+    db = get_db()
+    lot = db.execute("SELECT * FROM production_lots WHERE id=?", (lot_id,)).fetchone()
+    ls = db.execute(
+        "SELECT * FROM production_lot_sections WHERE lot_id=? AND section=? ORDER BY id DESC LIMIT 1",
+        (lot_id, section)
+    ).fetchone()
+    if not lot or not ls:
+        db.close()
+        abort(404)
+    stats = compute_section_stats(db, ls['id'], lot_section_row=ls)
+    timeline = _serialize_timeline(db, ls)
+    db.close()
+    return render_template('production/section_detail.html', lot=lot, ls=ls, stats=stats,
+                           timeline=timeline)
+
+
+@app.route('/production/<int:lot_id>/section/<section>/export')
+def production_section_export(lot_id, section):
+    """섹션 가동구간 하나의 상세 리포트 (가동률 요약 + 고장 내역 + 가동정지 내역)."""
+    if not session.get('edit_authorized'):
+        flash('엑셀 내보내기는 로그인 후 이용해 주세요.', 'danger')
+        return redirect(url_for('login', next=url_for('production_section_detail', lot_id=lot_id, section=section)))
+
+    db = get_db()
+    lot = db.execute("SELECT * FROM production_lots WHERE id=?", (lot_id,)).fetchone()
+    ls = db.execute(
+        "SELECT * FROM production_lot_sections WHERE lot_id=? AND section=? ORDER BY id DESC LIMIT 1",
+        (lot_id, section)
+    ).fetchone()
+    if not lot or not ls:
+        db.close()
+        abort(404)
+    stats = compute_section_stats(db, ls['id'], lot_section_row=ls)
+    db.close()
+
+    report_title = f"섹션 가동률 리포트 — {lot['model_name']} / {lot['lot_number']} / {section}"
+    rate = stats['uptime_rate']
+    subtitle = (f"모델명: {lot['model_name']}    LOT번호: {lot['lot_number']}    섹션: {section}    "
+                f"상태: {ls['status']}    기간: {ls['started_at']} ~ {ls['ended_at'] or '진행중'}    "
+                f"가동률: {rate}%")
+    NCOL = 6
+    wb = openpyxl.Workbook()
+    ws = xlsx_new_sheet(wb, f"{section}_가동률", first=True)
+    row = xlsx_title_block(ws, NCOL, report_title, subtitle)
+
+    completed_fault_durations = [f['duration_minutes'] for f in stats['faults'] if not f['ongoing']]
+    mttr = round(sum(completed_fault_durations) / len(completed_fault_durations), 1) if completed_fault_durations else None
+    row = xlsx_kpi_cards(ws, row, NCOL, [
+        ('가동률', f'{rate}%',
+         _XLSX_COLOR_SUCCESS if rate >= 95 else (_XLSX_COLOR_WARNING if rate >= 85 else _XLSX_COLOR_DANGER)),
+        ('고장건수', f"{stats['fault_count']}건", _XLSX_COLOR_DANGER if stats['fault_count'] else None),
+        ('정지시간', f"{stats['pause_downtime_seconds'] // 60}분",
+         _XLSX_COLOR_WARNING if stats['pause_downtime_seconds'] else None),
+        ('평균 조치시간(MTTR)', f'{mttr}분' if mttr is not None else '-', None),
+    ])
+
+    row = xlsx_block_heading(ws, row, NCOL, '가동률 요약 지표')
+    fill = 'E8F5E9' if rate >= 95 else ('FFFDE0' if rate >= 85 else 'FFE0E0')
+    hdr0, last0, row = xlsx_table_at(ws, row,
+        ['가동대상(분)', '고장(분)', '정지-다운타임(분)', '가동률(%)', '고장건수'],
+        [16, 12, 18, 12, 12],
+        [[stats['available_seconds'] // 60, stats['fault_seconds'] // 60,
+          stats['pause_downtime_seconds'] // 60, rate, stats['fault_count']]],
+        percent_cols=[4], fill_colors=[fill], total_cols=NCOL)
+    row += 1
+
+    row = xlsx_block_heading(ws, row, NCOL, f"고장 내역 ({len(stats['faults'])}건) — 발생원인 · 조치시간")
+    fault_rows = [[
+        f['occurred_at'], '(미완료)' if f['ongoing'] else f['completed_at'],
+        f['duration_minutes'], f['symptom'] or '', f['cause'] or '', f['worker'] or '',
+    ] for f in stats['faults']]
+    hdr1, last1, row = xlsx_table_at(ws, row, ['발생시각', '완료시각', '조치시간(분)', '증상', '원인', '작업자'],
+                                      [18, 18, 12, 20, 25, 10], fault_rows, total_cols=NCOL)
+    if fault_rows:
+        _, row = xlsx_total_row(ws, hdr1 + 1, last1, label_col=1, label=f'합계 ({len(fault_rows)}건)', value_cols=[3])
+    row += 1
+
+    row = xlsx_block_heading(ws, row, NCOL, f"가동정지 내역 ({len(stats['pauses'])}건) — 정지시간 · 정지사유")
+    pause_rows = [[
+        p['paused_at'], '(정지중)' if p['ongoing'] else p['resumed_at'], p['duration_minutes'], p['reason'],
+    ] for p in stats['pauses']]
+    hdr2, last2, row = xlsx_table_at(ws, row, ['정지시각', '재개시각', '정지시간(분)', '사유'],
+                                      [18, 18, 12, 14], pause_rows, total_cols=NCOL)
+    if pause_rows:
+        _, row = xlsx_total_row(ws, hdr2 + 1, last2, label_col=1, label=f'합계 ({len(pause_rows)}건)', value_cols=[3])
+    row += 1
+
+    # 일별 추이: 고장/가동정지를 날짜별로 묶어서 시간대별 그래프로 표시
+    daily = {}
+    for f in stats['faults']:
+        d = f['occurred_at'][:10]
+        daily.setdefault(d, {'fault': 0, 'downtime': 0})
+        daily[d]['fault'] += f['duration_minutes']
+    for p in stats['pauses']:
+        d = p['paused_at'][:10]
+        daily.setdefault(d, {'fault': 0, 'downtime': 0})
+        daily[d]['downtime'] += p['duration_minutes']
+
+    row = xlsx_block_heading(ws, row, NCOL, '일별 추이')
+    daily_rows = [[d, daily[d]['fault'], daily[d]['downtime']] for d in sorted(daily.keys())]
+    hdr3, last3, row = xlsx_table_at(ws, row, ['날짜', '고장(분)', '정지(분)'], [14, 12, 12], daily_rows, total_cols=NCOL)
+    row = xlsx_bar_chart(ws, '일별 고장/정지 시간(분)', cat_col=1, data_cols=[2, 3], header_row=hdr3, last_data_row=last3,
+                   start_col=1, anchor_row=row, x_title='날짜',
+                   series_colors=[_XLSX_COLOR_DANGER, _XLSX_COLOR_WARNING], num_cols=NCOL) + 1
+
+    xlsx_finalize_report_sheet(ws, report_title=report_title, tab_color='1F4E79', freeze_row=3)
+
+    log_action('엑셀 내보내기', 'production_lot_section', ls['id'],
+               f"{lot['model_name']} / {lot['lot_number']} / {section}")
+    return xlsx_response(wb, f"{lot['model_name']}_{lot['lot_number']}_{section}_가동률")
+
+
+@app.route('/production/<int:lot_id>/section/<section>/timeline.json')
+def production_section_timeline_json(lot_id, section):
+    db = get_db()
+    ls = db.execute(
+        "SELECT * FROM production_lot_sections WHERE lot_id=? AND section=? ORDER BY id DESC LIMIT 1",
+        (lot_id, section)
+    ).fetchone()
+    if not ls:
+        db.close()
+        return jsonify(ok=False, error='not found'), 404
+    stats = compute_section_stats(db, ls['id'], lot_section_row=ls)
+    timeline = _serialize_timeline(db, ls)
+    db.close()
+    return jsonify(ok=True, status=ls['status'], uptime_rate=stats['uptime_rate'],
+                   fault_count=stats['fault_count'], fault_seconds=stats['fault_seconds'],
+                   pause_count=stats['pause_count'], pause_downtime_seconds=stats['pause_downtime_seconds'],
+                   available_seconds=stats['available_seconds'], **timeline)
+
+
+@app.route('/production/<int:lot_id>/end', methods=['POST'])
+def production_end(lot_id):
+    if not session.get('edit_authorized'):
+        flash('LOT 종료는 로그인 후 이용해 주세요.', 'danger')
+        return redirect(url_for('login', next=url_for('production_detail', lot_id=lot_id)))
+
+    db = get_db()
+    lot = db.execute("SELECT * FROM production_lots WHERE id=?", (lot_id,)).fetchone()
+    if not lot or lot['status'] == '완료':
+        db.close()
+        flash('이미 종료되었거나 존재하지 않는 LOT입니다.', 'danger')
+        return redirect(url_for('production_list'))
+
+    # 아직 진행중/정지중인 섹션은 지금 시각으로 강제 종료 처리
+    running = db.execute(
+        "SELECT * FROM production_lot_sections WHERE lot_id=? AND status IN ('진행중','일시정지')", (lot_id,)
+    ).fetchall()
+    ended_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    for ls in running:
+        db.execute(
+            "UPDATE production_lot_section_pauses SET resumed_at=? WHERE lot_section_id=? AND resumed_at IS NULL",
+            (ended_at, ls['id'])
+        )
+        ls_dict = dict(ls)
+        ls_dict['ended_at'] = ended_at
+        stats = compute_section_stats(db, ls['id'], lot_section_row=ls_dict)
+        db.execute("""
+            UPDATE production_lot_sections
+            SET ended_at=?, status='완료', available_seconds=?, fault_seconds=?, fault_count=?,
+                pause_downtime_seconds=?, uptime_rate=?
+            WHERE id=?
+        """, (ended_at, stats['available_seconds'], stats['fault_seconds'], stats['fault_count'],
+              stats['pause_downtime_seconds'], stats['uptime_rate'], ls['id']))
+
+    db.execute("UPDATE production_lots SET ended_at=?, status='완료' WHERE id=?", (ended_at, lot_id))
+    db.commit()
+    log_action('LOT 종료', 'production_lot', lot_id, f"{lot['model_name']} / {lot['lot_number']}")
+    db.close()
+    flash('LOT을 종료했습니다.', 'success')
+    return redirect(url_for('production_detail', lot_id=lot_id))
+
+
+@app.route('/production/<int:lot_id>/edit', methods=['GET', 'POST'])
+def production_edit(lot_id):
+    if not session.get('edit_authorized'):
+        flash('수정 권한이 없습니다. 비밀번호를 입력해 주세요.', 'danger')
+        return redirect(url_for('production_detail', lot_id=lot_id))
+
+    db = get_db()
+    lot = db.execute("SELECT * FROM production_lots WHERE id=?", (lot_id,)).fetchone()
+    if not lot:
+        db.close()
+        abort(404)
+
+    if request.method == 'POST':
+        model_name = request.form.get('model_name', '').strip()
+        lot_number = request.form.get('lot_number', '').strip()
+        if not model_name or not lot_number:
+            db.close()
+            flash('모델명과 LOT번호를 입력해 주세요.', 'danger')
+            return redirect(url_for('production_edit', lot_id=lot_id))
+        db.execute("UPDATE production_lots SET model_name=?, lot_number=? WHERE id=?",
+                   (model_name, lot_number, lot_id))
+        db.commit()
+        log_action('LOT 수정', 'production_lot', lot_id, f'{model_name} / {lot_number}')
+        db.close()
+        flash('LOT 정보를 수정했습니다.', 'success')
+        return redirect(url_for('production_detail', lot_id=lot_id))
+
+    db.close()
+    return render_template('production/edit.html', lot=lot)
+
+
+@app.route('/production/<int:lot_id>/delete', methods=['POST'])
+def production_delete(lot_id):
+    if not session.get('edit_authorized'):
+        flash('삭제 권한이 없습니다. 비밀번호를 입력해 주세요.', 'danger')
+        return redirect(url_for('production_detail', lot_id=lot_id))
+
+    db = get_db()
+    try:
+        lot = db.execute("SELECT * FROM production_lots WHERE id=?", (lot_id,)).fetchone()
+        if not lot:
+            abort(404)
+        db.execute("UPDATE fault_history SET lot_id=NULL, lot_section_id=NULL WHERE lot_id=?", (lot_id,))
+        db.execute("""
+            DELETE FROM production_lot_section_pauses
+            WHERE lot_section_id IN (SELECT id FROM production_lot_sections WHERE lot_id=?)
+        """, (lot_id,))
+        db.execute("DELETE FROM production_lot_section_stats WHERE lot_id=?", (lot_id,))
+        db.execute("DELETE FROM production_lot_sections WHERE lot_id=?", (lot_id,))
+        db.execute("DELETE FROM production_lots WHERE id=?", (lot_id,))
+        db.commit()
+    finally:
+        db.close()
+    log_action('LOT 삭제', 'production_lot', lot_id, f"{lot['model_name']} / {lot['lot_number']}")
+    flash('LOT을 삭제했습니다.', 'warning')
+    return redirect(url_for('production_list'))
+
+
+@app.route('/production/settings', methods=['GET', 'POST'])
+def production_settings():
+    if not session.get('edit_authorized'):
+        flash('설정 변경은 로그인 후 이용해 주세요.', 'danger')
+        return redirect(url_for('login', next=url_for('production_settings')))
+
+    db = get_db()
+    if request.method == 'POST':
+        schedules = db.execute("SELECT id, name FROM break_schedules").fetchall()
+        for sch in schedules:
+            start = request.form.get(f'start_{sch["id"]}', '').strip()
+            end = request.form.get(f'end_{sch["id"]}', '').strip()
+            if start and end:
+                db.execute("UPDATE break_schedules SET start_time=?, end_time=? WHERE id=?",
+                           (start, end, sch['id']))
+        db.commit()
+        db.close()
+        flash('휴식시간 설정을 저장했습니다.', 'success')
+        return redirect(url_for('production_settings'))
+
+    schedules = db.execute("SELECT * FROM break_schedules ORDER BY id").fetchall()
+    db.close()
+    return render_template('production/settings.html', schedules=schedules)
+
+
+# ──────────────────────────────────────────────
 # 분석
 # ──────────────────────────────────────────────
+def _compute_equipment_reliability(db):
+    """설비별 MTBF(평균고장간격, 일)/MTTR(평균수리시간, 분).
+    MTBF는 같은 설비에서 연속된 고장 발생시각 사이의 평균 간격 (고장이 2건 이상이어야 계산 가능).
+    MTTR은 조치완료된 고장들의 평균 소요시간 (완료되지 않은 고장은 제외)."""
+    rows = db.execute("""
+        SELECT equipment_id, occurred_at, completed_at
+        FROM fault_history
+        WHERE equipment_id IS NOT NULL
+        ORDER BY equipment_id, occurred_at
+    """).fetchall()
+    by_eq = {}
+    for r in rows:
+        by_eq.setdefault(r['equipment_id'], []).append(r)
+
+    result = {}
+    for eq_id, faults in by_eq.items():
+        occurred_times = [_parse_dt(f['occurred_at']) for f in faults]
+        if len(occurred_times) >= 2:
+            gaps = [(occurred_times[i] - occurred_times[i - 1]).total_seconds() / 86400
+                    for i in range(1, len(occurred_times))]
+            mtbf_days = sum(gaps) / len(gaps)
+        else:
+            mtbf_days = None
+
+        durations = []
+        for f in faults:
+            if f['completed_at']:
+                occ = _parse_dt(f['occurred_at'])
+                comp = _parse_dt(f['completed_at'])
+                if comp > occ:
+                    durations.append((comp - occ).total_seconds() / 60)
+        mttr_minutes = sum(durations) / len(durations) if durations else None
+
+        result[eq_id] = {
+            'mtbf_days': round(mtbf_days, 1) if mtbf_days is not None else None,
+            'mttr_minutes': round(mttr_minutes, 1) if mttr_minutes is not None else None,
+        }
+    return result
+
+
 @app.route('/analysis/repeat')
 def analysis_repeat():
     db = get_db()
-    eq_stat = db.execute("""
-        SELECT f.eq_number, f.eq_name, e.section,
+    eq_stat_rows = db.execute("""
+        SELECT f.equipment_id, f.eq_number, f.eq_name, e.section,
                COUNT(*) as total,
                SUM(CASE WHEN f.grade='A' THEN 1 ELSE 0 END) as grade_a,
                SUM(CASE WHEN f.grade='B' THEN 1 ELSE 0 END) as grade_b,
@@ -1182,6 +2772,12 @@ def analysis_repeat():
         LEFT JOIN equipment e ON f.equipment_id = e.id
         GROUP BY f.equipment_id ORDER BY total DESC
     """).fetchall()
+    reliability = _compute_equipment_reliability(db)
+    eq_stat = []
+    for row in eq_stat_rows:
+        d = dict(row)
+        d.update(reliability.get(row['equipment_id'], {'mtbf_days': None, 'mttr_minutes': None}))
+        eq_stat.append(d)
 
     sym_stat = db.execute("""
         SELECT symptom, COUNT(*) as total FROM fault_history
@@ -1204,34 +2800,94 @@ def analysis_repeat():
                            parts_stat=parts_stat, grade_stat=grade_stat)
 
 
+@app.route('/analysis/repeat/export')
+def analysis_repeat_export():
+    if not session.get('edit_authorized'):
+        flash('엑셀 내보내기는 로그인 후 이용해 주세요.', 'danger')
+        return redirect(url_for('login', next=url_for('analysis_repeat')))
+
+    db = get_db()
+    eq_stat_rows = db.execute("""
+        SELECT f.equipment_id, f.eq_number, f.eq_name, e.section,
+               COUNT(*) as total,
+               SUM(CASE WHEN f.grade='A' THEN 1 ELSE 0 END) as grade_a,
+               SUM(CASE WHEN f.grade='B' THEN 1 ELSE 0 END) as grade_b,
+               SUM(CASE WHEN f.grade='C' THEN 1 ELSE 0 END) as grade_c
+        FROM fault_history f
+        LEFT JOIN equipment e ON f.equipment_id = e.id
+        GROUP BY f.equipment_id ORDER BY total DESC
+    """).fetchall()
+    reliability = _compute_equipment_reliability(db)
+    sym_stat = db.execute("""
+        SELECT symptom, COUNT(*) as total FROM fault_history
+        GROUP BY symptom ORDER BY total DESC
+    """).fetchall()
+    parts_stat = db.execute("""
+        SELECT part_name, SUM(quantity) as total, COUNT(DISTINCT fault_id) as cases
+        FROM used_parts GROUP BY part_name ORDER BY total DESC
+    """).fetchall()
+    grade_stat = db.execute("""
+        SELECT grade, COUNT(*) as total FROM fault_history
+        GROUP BY grade ORDER BY grade
+    """).fetchall()
+    db.close()
+
+    wb = openpyxl.Workbook()
+
+    ws1 = xlsx_sheet(wb, '설비별 고장현황',
+                      ['순위', '설비번호', '설비명', '섹션', '합계', 'A 생산정지', 'B 품질영향', 'C 경미',
+                       'MTBF(일)', 'MTTR(분)'],
+                      [6, 14, 20, 12, 8, 12, 12, 10, 10, 10], first=True)
+    for i, row in enumerate(eq_stat_rows, 1):
+        rel = reliability.get(row['equipment_id'], {'mtbf_days': None, 'mttr_minutes': None})
+        xlsx_row(ws1, i + 1, [i, row['eq_number'], row['eq_name'], row['section'] or '',
+                              row['total'], row['grade_a'] or 0, row['grade_b'] or 0, row['grade_c'] or 0,
+                              rel['mtbf_days'] if rel['mtbf_days'] is not None else '',
+                              rel['mttr_minutes'] if rel['mttr_minutes'] is not None else ''])
+
+    ws2 = xlsx_sheet(wb, '증상별 발생현황', ['순위', '증상', '건수'], [6, 30, 10])
+    for i, row in enumerate(sym_stat, 1):
+        xlsx_row(ws2, i + 1, [i, row['symptom'] or '미입력', row['total']])
+
+    ws3 = xlsx_sheet(wb, '부품별 교체현황', ['순위', '부품명', '교체건수', '총수량'], [6, 25, 12, 12])
+    for i, row in enumerate(parts_stat, 1):
+        xlsx_row(ws3, i + 1, [i, row['part_name'], row['cases'], row['total']])
+
+    ws4 = xlsx_sheet(wb, '고장등급 분포', ['등급', '건수'], [10, 10])
+    for i, row in enumerate(grade_stat, 1):
+        xlsx_row(ws4, i + 1, [row['grade'] or 'D', row['total']])
+
+    log_action('엑셀 내보내기', 'analysis', 0, '반복고장 분석')
+    return xlsx_response(wb, '반복고장분석')
+
+
 @app.route('/analysis/trend')
 def analysis_trend():
     db = get_db()
     period = request.args.get('period', 'monthly')
     section = request.args.get('section', '')
+    trend, trend_by_grade, eq_trend = _compute_trend_data(db, period, section)
+    db.close()
+    return render_template('analysis/trend.html',
+                           trend=trend, eq_trend=eq_trend, trend_by_grade=trend_by_grade,
+                           period=period, section=section, sections=SECTIONS)
 
+
+def _compute_trend_data(db, period, section):
     base_sql = "FROM fault_history WHERE 1=1"
     params = []
     if section:
         base_sql += " AND equipment_id IN (SELECT id FROM equipment WHERE section=?)"
         params.append(section)
 
-    if period == 'weekly':
-        trend = db.execute(f"""
-            SELECT strftime('%Y-W%W', occurred_at) as label, COUNT(*) as cnt
-            {base_sql}
-            GROUP BY label ORDER BY label DESC LIMIT 24
-        """, params).fetchall()
-    else:
-        trend = db.execute(f"""
-            SELECT strftime('%Y-%m', occurred_at) as label, COUNT(*) as cnt
-            {base_sql}
-            GROUP BY label ORDER BY label DESC LIMIT 24
-        """, params).fetchall()
-
+    label_col = "strftime('%Y-W%W', occurred_at)" if period == 'weekly' else "strftime('%Y-%m', occurred_at)"
+    trend = db.execute(f"""
+        SELECT {label_col} as label, COUNT(*) as cnt
+        {base_sql}
+        GROUP BY label ORDER BY label DESC LIMIT 24
+    """, params).fetchall()
     trend = list(reversed(trend))
 
-    label_col = "strftime('%Y-W%W', occurred_at)" if period == 'weekly' else "strftime('%Y-%m', occurred_at)"
     grade_rows = db.execute(f"""
         SELECT {label_col} as label, COALESCE(grade, 'D') as grade, COUNT(*) as cnt
         {base_sql}
@@ -1251,15 +2907,372 @@ def analysis_trend():
         GROUP BY equipment_id ORDER BY cnt DESC LIMIT 10
     """, params).fetchall()
 
+    return trend, trend_by_grade, eq_trend
+
+
+@app.route('/analysis/trend/export')
+def analysis_trend_export():
+    if not session.get('edit_authorized'):
+        flash('엑셀 내보내기는 로그인 후 이용해 주세요.', 'danger')
+        return redirect(url_for('login', next=url_for('analysis_trend')))
+
+    period = request.args.get('period', 'monthly')
+    section = request.args.get('section', '')
+    db = get_db()
+    trend, trend_by_grade, eq_trend = _compute_trend_data(db, period, section)
     db.close()
-    return render_template('analysis/trend.html',
-                           trend=trend, eq_trend=eq_trend, trend_by_grade=trend_by_grade,
-                           period=period, section=section, sections=SECTIONS)
+
+    wb = openpyxl.Workbook()
+    period_label = '주별' if period == 'weekly' else '월별'
+
+    ws1 = xlsx_sheet(wb, f'{period_label} 발생추이',
+                      ['기간', '건수', 'A 생산정지', 'B 품질영향', 'C 경미고장', 'D 기타'],
+                      [14, 10, 12, 12, 12, 10], first=True)
+    for i, t in enumerate(trend, 1):
+        xlsx_row(ws1, i + 1, [
+            t['label'], t['cnt'],
+            trend_by_grade['A'][i - 1], trend_by_grade['B'][i - 1],
+            trend_by_grade['C'][i - 1], trend_by_grade['D'][i - 1],
+        ])
+
+    ws2 = xlsx_sheet(wb, '설비별 고장 TOP10', ['순위', '설비', '건수'], [6, 30, 10])
+    for i, row in enumerate(eq_trend, 1):
+        xlsx_row(ws2, i + 1, [i, row['label'], row['cnt']])
+
+    fname_prefix = f'추이분석_{period_label}' + (f'_{section}' if section else '')
+    log_action('엑셀 내보내기', 'analysis', 0, f'추이 분석 ({period_label}{", " + section if section else ""})')
+    return xlsx_response(wb, fname_prefix)
 
 
 # ──────────────────────────────────────────────
 # 엑셀 다운로드
 # ──────────────────────────────────────────────
+_XLSX_FONT_NAME = '맑은 고딕'
+_XLSX_HEADER_FILL = PatternFill("solid", fgColor="1F4E79")
+_XLSX_HEADER_FONT = Font(bold=True, color="FFFFFF", size=11, name=_XLSX_FONT_NAME)
+_XLSX_DATA_FONT = Font(size=10, name=_XLSX_FONT_NAME)
+_XLSX_TOTAL_FONT = Font(bold=True, size=10, name=_XLSX_FONT_NAME)
+_XLSX_CENTER = Alignment(horizontal='center', vertical='center', wrap_text=True)
+_XLSX_THIN = Side(style='thin', color='000000')
+_XLSX_BORDER = Border(left=_XLSX_THIN, right=_XLSX_THIN, top=_XLSX_THIN, bottom=_XLSX_THIN)
+_XLSX_PERCENT_FMT = '0.0"%"'
+# 웹 화면과 동일한 브랜드 색상(--mes-*)을 그대로 써서 엑셀 차트와 화면 톤을 맞춘다.
+_XLSX_COLOR_DANGER = 'C62828'
+_XLSX_COLOR_WARNING = 'E65100'
+_XLSX_COLOR_SUCCESS = '2E7D32'
+_XLSX_COLOR_NAVY = '0D2137'
+_XLSX_COLOR_GRIDLINE = 'D9D9D9'
+
+def xlsx_new_sheet(wb, title, first=False):
+    """시트를 만들거나(또는 첫 시트를 재사용) 이름만 붙여서 반환. 내용은 xlsx_title_block/xlsx_table_at으로 채운다."""
+    ws = wb.active if first else wb.create_sheet(title)
+    if first:
+        ws.title = title
+    ws.sheet_view.showGridLines = False
+    return ws
+
+
+def xlsx_sheet(wb, title, headers, widths, first=False):
+    """기존 방식(표 하나 = 시트 하나)의 단순 리포트용 헬퍼. 헤더=1행 고정."""
+    ws = wb.active if first else wb.create_sheet(title)
+    if first:
+        ws.title = title
+    for ci, (h, w) in enumerate(zip(headers, widths), 1):
+        cell = ws.cell(row=1, column=ci, value=h)
+        cell.fill = _XLSX_HEADER_FILL
+        cell.font = _XLSX_HEADER_FONT
+        cell.alignment = _XLSX_CENTER
+        cell.border = _XLSX_BORDER
+        ws.column_dimensions[cell.column_letter].width = w
+    ws.row_dimensions[1].height = 22
+    return ws
+
+
+def xlsx_title_block(ws, num_cols, title, subtitle=None):
+    """시트 맨 위에 큰 리포트 제목 + 메타정보(모델/LOT/기간 등) 블록을 쓴다. 다음에 쓸 수 있는 빈 행 번호를 반환."""
+    last_col_letter = openpyxl.utils.get_column_letter(max(num_cols, 1))
+    ws.merge_cells(f'A1:{last_col_letter}1')
+    c = ws.cell(row=1, column=1, value=title)
+    c.font = Font(bold=True, size=16, color='FFFFFF', name=_XLSX_FONT_NAME)
+    c.fill = PatternFill("solid", fgColor=_XLSX_COLOR_NAVY)
+    c.alignment = Alignment(horizontal='left', vertical='center', indent=1)
+    ws.row_dimensions[1].height = 32
+    row = 2
+    if subtitle:
+        ws.merge_cells(f'A2:{last_col_letter}2')
+        c2 = ws.cell(row=2, column=1, value=subtitle)
+        c2.font = Font(size=10.5, color='595959', name=_XLSX_FONT_NAME)
+        c2.alignment = Alignment(horizontal='left', vertical='center', indent=1)
+        c2.fill = PatternFill("solid", fgColor='F2F2F2')
+        ws.row_dimensions[2].height = 20
+        row = 3
+    return row + 1
+
+
+def xlsx_kpi_cards(ws, row, ncol, cards):
+    """제목 배너 바로 아래에 큰 숫자 KPI 카드를 가로로 나열한다 (전체가동률/총고장건수/총정지시간/MTTR 등 한눈 요약).
+    cards: [(label, value_str, color_hex_or_None), ...]. 반환값: 다음에 쓸 수 있는 빈 행 번호."""
+    n = len(cards)
+    if n == 0:
+        return row
+    if n > ncol:
+        # 카드 수가 시트 폭보다 많으면 span이 0/음수가 되어 merge_cells가 예외를 던진다.
+        # 일어나서는 안 되는 상황이지만, 리포트 생성 자체가 죽는 것보단 초과분을 잘라내는 게 안전하다.
+        cards = cards[:ncol]
+        n = len(cards)
+    base_width = ncol // n
+    extra = ncol % n
+    label_row = row
+    value_row = row + 1
+    value_row_end = value_row + 1
+    card_fill = PatternFill("solid", fgColor='EEF1F5')
+    col = 1
+    for i, (label, value, color) in enumerate(cards):
+        span = base_width + (1 if i < extra else 0)
+        end_col = col + span - 1
+
+        ws.merge_cells(start_row=label_row, start_column=col, end_row=label_row, end_column=end_col)
+        lc = ws.cell(row=label_row, column=col, value=label)
+        lc.font = Font(size=9.5, color='6C757D', name=_XLSX_FONT_NAME)
+        lc.alignment = Alignment(horizontal='center', vertical='center')
+        lc.fill = card_fill
+
+        ws.merge_cells(start_row=value_row, start_column=col, end_row=value_row_end, end_column=end_col)
+        vc = ws.cell(row=value_row, column=col, value=value)
+        vc.font = Font(size=20, bold=True, color=(color or _XLSX_COLOR_NAVY), name=_XLSX_FONT_NAME)
+        vc.alignment = Alignment(horizontal='center', vertical='center')
+
+        for rr in range(label_row, value_row_end + 1):
+            for cc in range(col, end_col + 1):
+                cell = ws.cell(row=rr, column=cc)
+                cell.border = _XLSX_BORDER
+                cell.fill = card_fill
+        col = end_col + 1
+
+    ws.row_dimensions[label_row].height = 16
+    ws.row_dimensions[value_row].height = 26
+    ws.row_dimensions[value_row_end].height = 10
+    return value_row_end + 2
+
+
+def xlsx_block_heading(ws, row, num_cols, text):
+    """표 블록 사이에 넣는 '▌ 섹션명' 배너. 다음 행(표 헤더가 들어갈 행) 번호를 반환."""
+    last_col_letter = openpyxl.utils.get_column_letter(max(num_cols, 1))
+    ws.merge_cells(f'A{row}:{last_col_letter}{row}')
+    c = ws.cell(row=row, column=1, value=f'▌ {text}')
+    c.font = Font(bold=True, size=12, color=_XLSX_COLOR_NAVY, name=_XLSX_FONT_NAME)
+    c.alignment = Alignment(horizontal='left', vertical='center')
+    ws.row_dimensions[row].height = 22
+    return row + 1
+
+
+def xlsx_table_at(ws, header_row, headers, widths, rows, percent_cols=None, fill_colors=None, total_cols=None):
+    """header_row부터 표 헤더+데이터를 쓴다 (한 시트 안에 여러 표를 세로로 쌓을 때 사용).
+    total_cols를 주면(리포트 전체 폭=NCOL), 표의 실제 컬럼 수가 그보다 적을 때 마지막 컬럼을
+    total_cols까지 병합해서 늘린다 — 시트를 공유하는 다른 표들과 좌우 폭이 정확히 맞아떨어지게 하기 위함.
+    반환값: (header_row, last_data_row, next_free_row)."""
+    n = len(headers)
+    last_col = max(total_cols or n, n)
+    merge_last = last_col > n
+
+    for ci, (h, w) in enumerate(zip(headers, widths), 1):
+        span_end = last_col if (merge_last and ci == n) else ci
+        if span_end > ci:
+            ws.merge_cells(start_row=header_row, start_column=ci, end_row=header_row, end_column=span_end)
+        for cc in range(ci, span_end + 1):
+            cell = ws.cell(row=header_row, column=cc)
+            cell.fill = _XLSX_HEADER_FILL
+            cell.font = _XLSX_HEADER_FONT
+            cell.alignment = _XLSX_CENTER
+            cell.border = _XLSX_BORDER
+        ws.cell(row=header_row, column=ci, value=h)
+        letter = openpyxl.utils.get_column_letter(ci)
+        cur = ws.column_dimensions[letter].width
+        ws.column_dimensions[letter].width = max(cur or 0, w)
+    ws.row_dimensions[header_row].height = 22
+
+    r = header_row + 1
+    for i, values in enumerate(rows):
+        fill = fill_colors[i] if fill_colors else None
+        xlsx_row(ws, r, values, fill_color=fill, percent_cols=percent_cols,
+                 merge_last_to=(last_col if merge_last else None))
+        r += 1
+    last_data_row = r - 1
+    return header_row, last_data_row, r
+
+
+def xlsx_row(ws, row_i, values, fill_color=None, percent_cols=None, merge_last_to=None):
+    """한 행을 공통 스타일(중앙정렬+테두리, 선택적 배경색)로 채워 넣는다.
+    percent_cols: '95.5' 같은 숫자를 셀에서 '95.5%'로 보이게 할 1-indexed 컬럼들 (값 자체는 그대로 95.5 유지).
+    merge_last_to: 주어지면 마지막 값 컬럼을 그 컬럼까지 병합 (표들 간 우측 폭을 맞추기 위함)."""
+    row_fill = PatternFill("solid", fgColor=fill_color) if fill_color else None
+    percent_cols = percent_cols or ()
+    n = len(values)
+    for ci, val in enumerate(values, 1):
+        span_end = merge_last_to if (merge_last_to and ci == n and merge_last_to > n) else ci
+        if span_end > ci:
+            ws.merge_cells(start_row=row_i, start_column=ci, end_row=row_i, end_column=span_end)
+        for cc in range(ci, span_end + 1):
+            cell = ws.cell(row=row_i, column=cc)
+            cell.alignment = _XLSX_CENTER
+            cell.border = _XLSX_BORDER
+            cell.font = _XLSX_DATA_FONT
+            if row_fill:
+                cell.fill = row_fill
+        cell = ws.cell(row=row_i, column=ci, value=val)
+        if ci in percent_cols and isinstance(val, (int, float)):
+            cell.number_format = _XLSX_PERCENT_FMT
+    ws.row_dimensions[row_i].height = 18
+
+def xlsx_response(wb, filename_prefix):
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    fname = f"{filename_prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return send_file(buf, as_attachment=True, download_name=fname,
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+def xlsx_total_row(ws, first_data_row, last_data_row, label_col, label, value_cols):
+    """표 블록 맨 아래에 '합계' 행을 추가하고, 지정한 컬럼들의 합계를 계산해 넣는다.
+    first_data_row/last_data_row: 데이터가 있는 첫/마지막 행 번호. value_cols: 합계 낼 1-indexed 컬럼들.
+    반환값: (total_row, next_free_row)."""
+    total_row = last_data_row + 1
+    total_fill = PatternFill("solid", fgColor="E9ECEF")
+    cell = ws.cell(row=total_row, column=label_col, value=label)
+    cell.font = _XLSX_TOTAL_FONT
+    cell.border = _XLSX_BORDER
+    cell.fill = total_fill
+    cell.alignment = _XLSX_CENTER
+    for col in value_cols:
+        total = 0
+        for r in range(first_data_row, total_row):
+            v = ws.cell(row=r, column=col).value
+            if isinstance(v, (int, float)):
+                total += v
+        tcell = ws.cell(row=total_row, column=col, value=total)
+        tcell.font = _XLSX_TOTAL_FONT
+        tcell.alignment = _XLSX_CENTER
+        tcell.border = _XLSX_BORDER
+        tcell.fill = total_fill
+    return total_row, total_row + 1
+
+
+def _xlsx_style_chart_title(chart, size=1300, color=_XLSX_COLOR_NAVY):
+    """차트 제목을 진하고 조금 더 크게 (기본값은 작고 가늘어서 보고서에 묻힘)."""
+    cp = CharacterProperties(sz=size, b=True, solidFill=color, latin=None)
+    try:
+        chart.title.tx.rich.p[0].pPr = ParagraphProperties(defRPr=cp)
+        for r in chart.title.tx.rich.p[0].r:
+            r.rPr = cp
+    except Exception:
+        pass
+
+
+def xlsx_bar_chart(ws, title, cat_col, data_cols, header_row, last_data_row, start_col, anchor_row=None,
+                   y_title='분', x_title='', series_colors=None, point_colors=None, y_percent=False,
+                   num_cols=8, min_rows=15):
+    """막대그래프를 시트에 삽입. header_row/last_data_row는 '참조할 표 데이터'의 행 범위이고,
+    anchor_row는 '차트를 그릴 위치'(생략 시 header_row와 동일) — 같은 표를 참조하는 차트 여러 개를
+    세로로 쌓을 때 anchor_row만 바꿔주면 된다.
+    표처럼 셀 경계에 정확히 맞춰(두 셀 앵커) 배치하므로 옆 표와 열/행이 가지런히 정렬된다.
+    series_colors: data_cols 각각에 대응하는 색상 hex 리스트 (계열이 여럿일 때, 예: 고장=danger/정지=warning).
+    point_colors: 단일 계열일 때, 막대 하나하나를 값에 따라 다르게 칠할 hex 리스트 (가동률 임계값 강조용).
+    반환값: 차트가 차지하는 마지막 행 번호 (다음 블록/차트를 그 아래로 이어붙일 때 사용)."""
+    anchor_row = anchor_row or header_row
+    if last_data_row < header_row + 1:
+        return anchor_row
+    chart = BarChart()
+    chart.type = "col"
+    chart.grouping = "clustered"
+    chart.gapWidth = 60
+    chart.overlap = -10
+    chart.style = None
+    chart.title = title
+    _xlsx_style_chart_title(chart)
+    chart.y_axis.title = y_title
+    chart.x_axis.title = x_title
+    chart.y_axis.majorGridlines.spPr = GraphicalProperties(ln=LineProperties(solidFill=_XLSX_COLOR_GRIDLINE))
+    chart.x_axis.delete = False
+    chart.y_axis.delete = False
+    if y_percent:
+        chart.y_axis.numFmt = '0"%"'
+        chart.y_axis.scaling.min = 0
+        chart.y_axis.scaling.max = 120  # 막대/라벨이 100%에서 위쪽 테두리·제목과 겹치지 않도록 여유를 더 확보
+    # plotArea를 제목 아래로 고정 배치 (막대가 1개뿐인 차트도 제목과 겹치지 않도록 상단 여백을 명시적으로 확보)
+    # 주의: openpyxl은 저장 시 chart.plot_area.layout을 chart.layout으로 덮어쓰므로 반드시 chart.layout에 설정해야 한다.
+    chart.layout = Layout(
+        manualLayout=ManualLayout(x=0.06, y=0.22, h=0.62, w=0.90, xMode="edge", yMode="edge")
+    )
+
+    cats = Reference(ws, min_col=cat_col, min_row=header_row + 1, max_row=last_data_row)
+    for i, dc in enumerate(data_cols):
+        data = Reference(ws, min_col=dc, min_row=header_row, max_row=last_data_row)
+        chart.add_data(data, titles_from_data=True)
+        series = chart.series[-1]
+        if series_colors and i < len(series_colors):
+            series.graphicalProperties.solidFill = series_colors[i]
+            series.graphicalProperties.ln = LineProperties(noFill=True)
+        if point_colors:
+            dpts = []
+            for idx, color in enumerate(point_colors):
+                dpt = DataPoint(idx=idx)
+                dpt.graphicalProperties = GraphicalProperties(solidFill=color)
+                dpt.graphicalProperties.ln = LineProperties(noFill=True)
+                dpts.append(dpt)
+            series.data_points = dpts
+    chart.set_categories(cats)
+
+    dl = DataLabelList()
+    dl.showVal = True
+    dl.showSerName = False
+    dl.showCatName = False
+    dl.showLegendKey = False
+    dl.showPercent = False
+    dl.showBubbleSize = False
+    dl.numFmt = '0"%"' if y_percent else '0'
+    dl.dLblPos = 'outEnd'
+    chart.dataLabels = dl
+
+    # 계열이 하나뿐이면 범례가 제목과 중복돼 자리만 차지하므로 끈다 (여러 계열일 때만 범례 표시)
+    if len(data_cols) <= 1:
+        chart.legend = None
+
+    table_rows = last_data_row - header_row + 1
+    chart_rows = max(table_rows, min_rows)
+    end_row = anchor_row + chart_rows - 1
+    end_col = start_col + num_cols - 1
+    marker_from = AnchorMarker(col=start_col - 1, colOff=0, row=anchor_row - 1, rowOff=0)
+    marker_to = AnchorMarker(col=end_col, colOff=0, row=end_row, rowOff=0)
+    chart.anchor = TwoCellAnchor(editAs='oneCell', _from=marker_from, to=marker_to)
+    ws.add_chart(chart)
+    return end_row
+
+
+def xlsx_finalize_report_sheet(ws, report_title=None, tab_color=None, freeze_row=None, wide=True):
+    """여러 표 블록이 세로로 쌓인 '한 시트 종합 리포트' 마무리: 인쇄설정(가로/폭맞춤), 문서 제목·생성일시, 탭 색상.
+    freeze_row을 주면 그 행까지(제목 블록) 스크롤해도 항상 보이게 고정."""
+    if freeze_row:
+        ws.freeze_panes = ws.cell(row=freeze_row, column=1)
+
+    ws.page_setup.orientation = 'landscape' if wide else 'portrait'
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_margins = PageMargins(left=0.4, right=0.4, top=0.6, bottom=0.5, header=0.3, footer=0.3)
+
+    if report_title:
+        ws.oddHeader.left.text = report_title
+        ws.oddHeader.left.size = 12
+        ws.oddHeader.left.font = _XLSX_FONT_NAME + ',Bold'
+        ws.oddHeader.right.text = f"생성일시: {datetime.now().strftime('%Y-%m-%d %H:%M')} · Sinopex MES"
+        ws.oddHeader.right.size = 8
+        ws.oddFooter.center.text = "페이지 &P / &N"
+
+    if tab_color:
+        ws.sheet_properties.tabColor = tab_color
+
+
 @app.route('/export/excel')
 def export_excel():
     date_from = request.args.get('date_from', '').strip()
@@ -1344,6 +3357,7 @@ def export_excel():
     wb.save(buf)
     buf.seek(0)
 
+    log_action('엑셀 내보내기', 'fault_history', 0, f'고장이력 ({len(faults)}건)')
     fname = f"고장이력_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
     return send_file(buf, as_attachment=True, download_name=fname,
                      mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
@@ -1395,6 +3409,36 @@ def do_backup():
         return jsonify({'ok': True, 'last': ts})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+# ─── 자동 DB 백업 (매일, 타임스탬프 보관) ───────────────────
+AUTO_BACKUP_DIR = os.path.join(BASE_DIR, 'db_backups')
+AUTO_BACKUP_RETENTION_DAYS = 14
+
+def _auto_backup_db():
+    os.makedirs(AUTO_BACKUP_DIR, exist_ok=True)
+    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+    src = os.path.join(BASE_DIR, 'equipment_qr.db')
+    dst = os.path.join(AUTO_BACKUP_DIR, f'equipment_qr_{ts}.db')
+    shutil.copy2(src, dst)
+
+    cutoff = datetime.now() - timedelta(days=AUTO_BACKUP_RETENTION_DAYS)
+    for f in os.listdir(AUTO_BACKUP_DIR):
+        p = os.path.join(AUTO_BACKUP_DIR, f)
+        if os.path.isfile(p) and datetime.fromtimestamp(os.path.getmtime(p)) < cutoff:
+            try:
+                os.remove(p)
+            except Exception:
+                logging.exception('오래된 자동 백업 삭제 실패: %s', p)
+    logging.info('자동 DB 백업 완료: %s', dst)
+
+def _auto_backup_loop():
+    while True:
+        try:
+            _auto_backup_db()
+        except Exception:
+            logging.exception('자동 DB 백업 실패')
+        time.sleep(24 * 60 * 60)
 
 
 # ──────────────────────────────────────────────
@@ -1462,8 +3506,19 @@ def audit_log_view():
 # ──────────────────────────────────────────────
 @app.route('/uploads/<path:subfolder>/<filename>')
 def uploaded_file(subfolder, filename):
-    folder = os.path.join(UPLOAD_DIR, subfolder)
-    return send_file(os.path.join(folder, filename))
+    full_path = safe_join(UPLOAD_DIR, subfolder, filename)
+    if full_path is None or not os.path.isfile(full_path):
+        abort(404)
+    return send_file(full_path)
+
+
+# PWA 서비스워커: 루트 경로(/)에서 서빙해야 하위 경로까지 캐시 제어 가능
+@app.route('/sw.js')
+def service_worker():
+    resp = send_file(os.path.join(BASE_DIR, 'static', 'sw.js'), mimetype='application/javascript')
+    resp.headers['Service-Worker-Allowed'] = '/'
+    resp.headers['Cache-Control'] = 'no-cache'
+    return resp
 
 
 # ──────────────────────────────────────────────
@@ -1481,6 +3536,7 @@ def internal_error(e):
 
 if __name__ == '__main__':
     init_db()
+    threading.Thread(target=_auto_backup_loop, daemon=True).start()
     ip = get_local_ip()
     port = 5001
     print(f"\n{'='*50}")
@@ -1490,7 +3546,7 @@ if __name__ == '__main__':
     print(f"{'='*50}\n")
     try:
         from waitress import serve
-        serve(app, host='0.0.0.0', port=port, threads=8)
+        serve(app, host='0.0.0.0', port=port, threads=8, ident=None)
     except ImportError:
         logging.warning('waitress가 설치되어 있지 않아 Flask 개발 서버로 대신 실행합니다. (pip install waitress 권장)')
         app.run(host='0.0.0.0', port=port, debug=False)

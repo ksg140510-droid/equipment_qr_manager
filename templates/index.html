@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% from '_macros.html' import empty_row, empty_block %}
 {% block title %}대시보드 - 설비 QR 이력관리{% endblock %}
 
 {% block content %}
@@ -141,8 +142,8 @@
     </a>
   </div>
 
-  <!-- 처리 상태 현황 + 고장 발생 추이 (일/주/월 통합) -->
-  <div class="col-12 col-lg-4">
+  <!-- 처리 상태 현황 + 고장 발생 추이 + 섹션별 실시간 가동률 -->
+  <div class="col-12 col-lg-3">
     <div class="card h-100">
       <div class="card-header">
         <i class="bi bi-activity" style="color:var(--mes-blue)"></i>처리 상태 현황
@@ -160,32 +161,32 @@
           <div class="col-6">
             <a href="{{ url_for('fault_list') }}?status=미조치" class="text-decoration-none stat-card-link d-block">
               <div class="p-2 rounded-3 text-center" style="background:#fff5f5;border:2px solid #ffcdd2">
-                <div style="font-size:1.5rem;font-weight:900;color:var(--mes-danger)">{{ ns.mi }}</div>
-                <div style="font-size:0.7rem;font-weight:700;color:var(--mes-danger)">미조치</div>
+                <div style="font-size:1.2rem;font-weight:900;color:var(--mes-danger)">{{ ns.mi }}</div>
+                <div style="font-size:0.65rem;font-weight:700;color:var(--mes-danger)">미조치</div>
               </div>
             </a>
           </div>
           <div class="col-6">
             <a href="{{ url_for('fault_list') }}?status=진행중" class="text-decoration-none stat-card-link d-block">
               <div class="p-2 rounded-3 text-center" style="background:#fff8e1;border:2px solid #ffe082">
-                <div style="font-size:1.5rem;font-weight:900;color:#E65100">{{ ns.ji }}</div>
-                <div style="font-size:0.7rem;font-weight:700;color:#E65100">진행중</div>
+                <div style="font-size:1.2rem;font-weight:900;color:#E65100">{{ ns.ji }}</div>
+                <div style="font-size:0.65rem;font-weight:700;color:#E65100">진행중</div>
               </div>
             </a>
           </div>
           <div class="col-6">
             <a href="{{ url_for('fault_list') }}?status=대기" class="text-decoration-none stat-card-link d-block">
               <div class="p-2 rounded-3 text-center" style="background:#ede7f6;border:2px solid #b39ddb">
-                <div style="font-size:1.5rem;font-weight:900;color:#6A1B9A">{{ ns.dg }}</div>
-                <div style="font-size:0.7rem;font-weight:700;color:#6A1B9A">대기</div>
+                <div style="font-size:1.2rem;font-weight:900;color:#6A1B9A">{{ ns.dg }}</div>
+                <div style="font-size:0.65rem;font-weight:700;color:#6A1B9A">대기</div>
               </div>
             </a>
           </div>
           <div class="col-6">
             <a href="{{ url_for('fault_list') }}?status=완료" class="text-decoration-none stat-card-link d-block">
               <div class="p-2 rounded-3 text-center" style="background:#e8f5e9;border:2px solid #a5d6a7">
-                <div style="font-size:1.5rem;font-weight:900;color:var(--mes-success)">{{ ns.wa }}</div>
-                <div style="font-size:0.7rem;font-weight:700;color:var(--mes-success)">완료</div>
+                <div style="font-size:1.2rem;font-weight:900;color:var(--mes-success)">{{ ns.wa }}</div>
+                <div style="font-size:0.65rem;font-weight:700;color:var(--mes-success)">완료</div>
               </div>
             </a>
           </div>
@@ -195,7 +196,7 @@
   </div>
 
   <!-- 고장 발생 추이 (일별/주별/월별 드롭다운 통합) -->
-  <div class="col-12 col-lg-8">
+  <div class="col-12 col-lg-4">
     <div class="card h-100">
       <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
         <span><i class="bi bi-graph-up" style="color:var(--mes-blue)"></i> 고장 발생 추이</span>
@@ -219,9 +220,59 @@
         </div>
       </div>
       <div class="card-body pt-2">
-        <div style="height:220px;">
+        <div style="height:170px;">
           <canvas id="trendChart"></canvas>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 섹션별 실시간 설비가동률 -->
+  <div class="col-12 col-lg-5">
+    <div class="card h-100">
+      <div class="card-header d-flex align-items-center justify-content-between">
+        <span><i class="bi bi-speedometer2" style="color:var(--mes-blue)"></i> 섹션별 실시간 가동률</span>
+        <span class="text-muted small" id="sec-updated"></span>
+      </div>
+      <div class="card-body py-2" id="section-uptime-list">
+        {% for s in section_status %}
+        <div class="sec-card mb-2 p-2" data-section="{{ s.section }}"
+             data-lot-id="{{ s.lot_id or '' }}" data-start-lot-id="{{ s.start_lot_id or '' }}"
+             data-multiple-active="{{ 'true' if s.multiple_active_lots else 'false' }}">
+          <a href="{% if s.running or s.paused %}{{ url_for('production_section_detail', lot_id=s.lot_id, section=s.section) }}{% else %}{{ url_for('production_list') }}{% endif %}"
+             class="text-decoration-none d-flex align-items-center gap-2" style="color:inherit;min-width:0">
+            <div style="width:64px;font-size:.78rem;font-weight:700;color:var(--mes-text)">{{ s.section }}</div>
+            <div class="progress flex-grow-1" style="height:14px;background:var(--mes-bg)">
+              {% if s.running or s.paused %}
+              <div class="progress-bar sec-bar" style="width:{{ s.uptime_rate }}%;background:{% if s.paused %}var(--mes-muted){% elif s.uptime_rate >= 95 %}var(--mes-success){% elif s.uptime_rate >= 85 %}var(--mes-warning){% else %}var(--mes-danger){% endif %}"></div>
+              {% endif %}
+            </div>
+            <div class="text-end sec-pct" style="width:52px;font-size:.8rem;font-weight:800;{% if not s.running and not s.paused %}color:var(--mes-muted){% endif %}">
+              {% if s.paused %}정지중{% elif s.running %}{{ '%.1f'|format(s.uptime_rate) }}%{% else %}대기{% endif %}
+            </div>
+          </a>
+          {% if session.get('edit_authorized') %}
+          <div class="d-flex gap-1 mt-1 sec-actions">
+            <button type="button" class="btn btn-sm btn-primary flex-fill sec-start-btn"
+                    style="{% if not (not s.running and not s.paused) %}display:none{% endif %};min-height:34px;font-size:.75rem">
+              <i class="bi bi-play-fill"></i> 시작
+            </button>
+            <button type="button" class="btn btn-sm btn-warning flex-fill sec-pause-btn"
+                    style="{% if not s.running %}display:none{% endif %};min-height:34px;font-size:.75rem">
+              <i class="bi bi-pause-fill"></i> 정지
+            </button>
+            <button type="button" class="btn btn-sm btn-primary flex-fill sec-resume-btn"
+                    style="{% if not s.paused %}display:none{% endif %};min-height:34px;font-size:.75rem">
+              <i class="bi bi-play-fill"></i> 재개
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-danger sec-end-btn"
+                    style="{% if not (s.running or s.paused) %}display:none{% endif %};min-height:34px;font-size:.75rem">
+              <i class="bi bi-stop-fill"></i> 종료
+            </button>
+          </div>
+          {% endif %}
+        </div>
+        {% endfor %}
       </div>
     </div>
   </div>
@@ -254,7 +305,7 @@
               </tr>
               {% endfor %}
               {% if not top_eq %}
-              <tr><td colspan="4" class="text-center text-muted py-4">데이터 없음</td></tr>
+              {{ empty_row(4, '고장 이력이 없습니다.', icon='bi-trophy', py='py-4') }}
               {% endif %}
             </tbody>
           </table>
@@ -287,7 +338,7 @@
               </tr>
               {% endfor %}
               {% if not top_symptom %}
-              <tr><td colspan="3" class="text-center text-muted py-4">데이터 없음</td></tr>
+              {{ empty_row(3, '고장 이력이 없습니다.', icon='bi-list-ol', py='py-4') }}
               {% endif %}
             </tbody>
           </table>
@@ -318,7 +369,7 @@
         </a>
         {% endfor %}
         {% if not grade_cnt %}
-        <p class="text-muted text-center small py-2">데이터 없음</p>
+        {{ empty_block('고장 이력이 없습니다.', icon='bi-shield-exclamation', py='py-3') }}
         {% endif %}
       </div>
     </div>
@@ -338,7 +389,7 @@
           </li>
           {% endfor %}
           {% if not top_worker %}
-          <li class="list-group-item text-muted text-center py-3 small">데이터 없음</li>
+          <li class="list-group-item small">{{ empty_block('조치 이력이 없습니다.', icon='bi-person-check', py='py-3') }}</li>
           {% endif %}
         </ul>
       </div>
@@ -365,7 +416,7 @@
               </tr>
               {% endfor %}
               {% if not completed_parts %}
-              <tr><td colspan="3" class="text-center text-muted py-4">데이터 없음</td></tr>
+              {{ empty_row(3, '조치완료 부품 사용 이력이 없습니다.', icon='bi-box-seam', py='py-4') }}
               {% endif %}
             </tbody>
           </table>
@@ -375,6 +426,42 @@
   </div>
 
 </div>
+
+{% if session.get('edit_authorized') %}
+<!-- 가동정지 사유 모달 (섹션별 실시간 가동률 카드에서 재사용) -->
+<div class="modal fade" id="dashPauseReasonModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered" style="max-width:380px">
+    <div class="modal-content" style="border-radius:14px;overflow:hidden;border:none">
+      <div class="modal-header" style="background:var(--mes-navy);color:#fff;border:none;padding:1rem 1.3rem">
+        <h6 class="modal-title mb-0"><i class="bi bi-pause-circle-fill me-2" style="color:var(--mes-cyan)"></i>가동 정지 사유</h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-4">
+        <p class="text-muted small mb-3" id="dashPauseReasonTarget"></p>
+        <form id="dashPauseReasonForm">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="mb-2">
+            {% for r in pause_reasons %}
+            <div class="form-check">
+              <input class="form-check-input dash-pause-reason-radio" type="radio" name="reason" id="dash-reason-{{ r }}" value="{{ r }}" {% if loop.first %}checked{% endif %}>
+              <label class="form-check-label" for="dash-reason-{{ r }}">{{ r }}</label>
+            </div>
+            {% endfor %}
+          </div>
+          <input type="text" name="reason_custom" id="dashPauseReasonCustom" class="form-control mb-3"
+                 placeholder="사유를 입력하세요" style="display:none" maxlength="50">
+          <div class="d-grid">
+            <button type="submit" class="btn btn-warning" style="min-height:48px;font-weight:700">
+              <i class="bi bi-pause-circle-fill me-1"></i>가동 정지
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 {% endblock %}
 
 {% block scripts %}
@@ -426,5 +513,173 @@ function renderTrendChart(view) {
 const trendViewSelect = document.getElementById('trendViewSelect');
 trendViewSelect.addEventListener('change', function() { renderTrendChart(this.value); });
 renderTrendChart('daily');
+
+/* 섹션별 실시간 가동률 - 30초마다 자동 갱신 + 대시보드에서 바로 시작/정지/재개/종료 */
+(function() {
+  const listEl = document.getElementById('section-uptime-list');
+  const updatedEl = document.getElementById('sec-updated');
+  if (!listEl) return;
+
+  const csrfToken = '{{ csrf_token() }}';
+  const pauseModalEl = document.getElementById('dashPauseReasonModal');
+  const pauseModal = pauseModalEl ? new bootstrap.Modal(pauseModalEl) : null;
+  const pauseForm = document.getElementById('dashPauseReasonForm');
+  const pauseTargetEl = document.getElementById('dashPauseReasonTarget');
+
+  function barColor(rate) {
+    if (rate >= 95) return 'var(--mes-success)';
+    if (rate >= 85) return 'var(--mes-warning)';
+    return 'var(--mes-danger)';
+  }
+
+  function setBtnDisplay(card, cls, show) {
+    const btn = card.querySelector(cls);
+    if (btn) btn.style.display = show ? '' : 'none';
+  }
+
+  function refresh() {
+    fetch('{{ url_for("dashboard_sections_json") }}').then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(data) {
+        if (!data || !data.ok) return;
+        data.sections.forEach(function(s) {
+          const card = listEl.querySelector('.sec-card[data-section="' + CSS.escape(s.section) + '"]');
+          if (!card) return;
+          const bar = card.querySelector('.sec-bar');
+          const pct = card.querySelector('.sec-pct');
+          const track = card.querySelector('.progress');
+          const idle = !s.running && !s.paused;
+          if (s.running || s.paused) {
+            const color = s.paused ? 'var(--mes-muted)' : barColor(s.uptime_rate);
+            if (!bar) {
+              track.innerHTML = '<div class="progress-bar sec-bar" style="width:' + s.uptime_rate + '%;background:' + color + '"></div>';
+            } else {
+              bar.style.width = s.uptime_rate + '%';
+              bar.style.background = color;
+            }
+            pct.textContent = s.paused ? '정지중' : (s.uptime_rate.toFixed(1) + '%');
+            pct.style.color = s.paused ? 'var(--mes-muted)' : '';
+          } else {
+            track.innerHTML = '';
+            pct.textContent = '대기';
+            pct.style.color = 'var(--mes-muted)';
+          }
+          if (s.lot_id) card.dataset.lotId = s.lot_id;
+          if ('start_lot_id' in s) card.dataset.startLotId = s.start_lot_id || '';
+          if ('multiple_active_lots' in s) card.dataset.multipleActive = s.multiple_active_lots ? 'true' : 'false';
+          setBtnDisplay(card, '.sec-start-btn', idle);
+          setBtnDisplay(card, '.sec-pause-btn', s.running);
+          setBtnDisplay(card, '.sec-resume-btn', s.paused);
+          setBtnDisplay(card, '.sec-end-btn', s.running || s.paused);
+        });
+        updatedEl.textContent = '갱신 ' + new Date().toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+      }).catch(function() {});
+  }
+
+  function postAction(lotId, section, action, extraFields) {
+    const fd = new FormData();
+    fd.append('csrf_token', csrfToken);
+    if (extraFields) {
+      Object.keys(extraFields).forEach(function(k) { fd.append(k, extraFields[k]); });
+    }
+    return fetch('/production/' + lotId + '/section/' + encodeURIComponent(section) + '/' + action,
+                 { method: 'POST', body: fd });
+  }
+
+  listEl.addEventListener('click', function(e) {
+    const card = e.target.closest('.sec-card');
+    if (!card) return;
+    const section = card.dataset.section;
+
+    const startBtn = e.target.closest('.sec-start-btn');
+    if (startBtn) {
+      e.preventDefault();
+      const startLotId = card.dataset.startLotId;
+      if (!startLotId) {
+        if (card.dataset.multipleActive === 'true') {
+          alert('진행중인 LOT이 여러 개입니다. LOT 관리 화면에서 시작할 LOT을 선택해 주세요.');
+        } else {
+          alert('진행중인 LOT이 없습니다. 먼저 LOT을 등록해 주세요.');
+        }
+        window.location.href = '{{ url_for("production_list") }}';
+        return;
+      }
+      startBtn.disabled = true;
+      postAction(startLotId, section, 'start')
+        .then(function() { refresh(); })
+        .catch(function() {})
+        .finally(function() { startBtn.disabled = false; });
+      return;
+    }
+
+    const resumeBtn = e.target.closest('.sec-resume-btn');
+    if (resumeBtn) {
+      e.preventDefault();
+      const lotId = card.dataset.lotId;
+      if (!lotId) return;
+      resumeBtn.disabled = true;
+      postAction(lotId, section, 'resume')
+        .then(function() { refresh(); })
+        .catch(function() {})
+        .finally(function() { resumeBtn.disabled = false; });
+      return;
+    }
+
+    const pauseBtn = e.target.closest('.sec-pause-btn');
+    if (pauseBtn && pauseModal) {
+      e.preventDefault();
+      const lotId = card.dataset.lotId;
+      if (!lotId) return;
+      pauseForm.dataset.lotId = lotId;
+      pauseForm.dataset.section = section;
+      pauseTargetEl.textContent = "'" + section + "' 가동을 정지합니다. 사유를 선택해 주세요.";
+      pauseModal.show();
+      return;
+    }
+
+    const endBtn = e.target.closest('.sec-end-btn');
+    if (endBtn) {
+      e.preventDefault();
+      const lotId = card.dataset.lotId;
+      if (!lotId) return;
+      if (!confirm("'" + section + "' 가동을 종료하시겠습니까?")) return;
+      endBtn.disabled = true;
+      postAction(lotId, section, 'end')
+        .then(function() { refresh(); })
+        .catch(function() {})
+        .finally(function() { endBtn.disabled = false; });
+    }
+  });
+
+  if (pauseForm) {
+    document.querySelectorAll('.dash-pause-reason-radio').forEach(function(radio) {
+      radio.addEventListener('change', function() {
+        const customInput = document.getElementById('dashPauseReasonCustom');
+        const isOther = this.value === '기타';
+        customInput.style.display = isOther ? 'block' : 'none';
+        customInput.required = isOther;
+        if (isOther) customInput.focus();
+      });
+    });
+    pauseForm.addEventListener('submit', function(e) {
+      e.preventDefault();
+      const lotId = pauseForm.dataset.lotId;
+      const section = pauseForm.dataset.section;
+      const reasonSel = pauseForm.querySelector('input[name="reason"]:checked');
+      const reasonCustom = document.getElementById('dashPauseReasonCustom').value;
+      const submitBtn = pauseForm.querySelector('button[type="submit"]');
+      submitBtn.disabled = true;
+      postAction(lotId, section, 'pause', {
+        reason: reasonSel ? reasonSel.value : '',
+        reason_custom: reasonCustom,
+      })
+        .then(function() { pauseModal.hide(); refresh(); })
+        .catch(function() {})
+        .finally(function() { submitBtn.disabled = false; });
+    });
+  }
+
+  updatedEl.textContent = '갱신 ' + new Date().toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+  setInterval(refresh, 30000);
+})();
 </script>
 {% endblock %}

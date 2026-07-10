@@ -151,6 +151,14 @@ body {
   min-height: var(--header-h);
 }
 .sidebar-brand img { height: 32px; width: auto; border-radius: 4px; background: #fff; padding: 2px; flex-shrink: 0; }
+/* 로고 원본이 가로로 긴 이미지(SYNOPEX 워드마크 포함)라, 사이드바가 축소(76px)되면
+   원본 비율 그대로는 폭을 넘어 옆의 헤더 토글 버튼을 가려버린다. 축소 상태에서는
+   정사각형 심볼 아이콘으로 바꿔서 항상 사이드바 폭 안에 들어오게 한다. */
+.sidebar-brand-logo-icon { display: none; }
+body.sidebar-collapsed .sidebar-brand-logo-full { display: none; }
+body.sidebar-collapsed .sidebar-brand-logo-icon {
+  display: block; height: 32px; width: 32px; border-radius: 6px; flex-shrink: 0;
+}
 .sidebar-brand-text { line-height: 1.25; overflow: hidden; }
 .sidebar-brand-text .b1 { font-size: var(--fs-sm); font-weight: 700; color: #fff; white-space: nowrap; }
 .sidebar-brand-text .b2 { font-size: 10px; color: var(--mes-cyan); font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; }
@@ -684,6 +692,24 @@ a.stat-card-link:hover .stat-link-hint { color: var(--mes-blue); }
   .btn-xl { min-height: 70px !important; }
   .grade-radio-group .btn-check + label { min-height: 72px !important; }
 }
+
+/* ── 경고색 통일 (Bootstrap 기본 노랑 → 앱 고유 경고색) ──
+   badge/progress-bar/alert에 bg-warning을 쓰면 부트스트랩 기본 밝은 노랑(#ffc107)이 나와서
+   --mes-warning(진한 오렌지, 대시보드/타임라인 등에서 이미 사용 중)과 화면마다 톤이 달라 보였다.
+   이 규칙으로 어디서 bg-warning을 쓰든 항상 같은 경고색+흰 글자로 보이게 통일한다. */
+.badge.bg-warning,
+.progress-bar.bg-warning {
+  background-color: var(--mes-warning) !important;
+  color: #fff !important;
+}
+
+/* ── 대시보드 섹션별 실시간 가동률 카드 (모바일에서 시작/정지/재개/종료를 바로 누르기 위한 카드) ── */
+.sec-card {
+  border: 1px solid var(--mes-border);
+  border-radius: 8px;
+  background: var(--mes-card);
+}
+.sec-card .sec-actions .btn { min-width: 0; }
 
 /* ── 인쇄 ── */
 @media print {

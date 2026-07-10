@@ -1,0 +1,114 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import empty_row %}
+{% block title %}생산 LOT 관리{% endblock %}
+
+{% block content %}
+<div class="row mt-3 g-3">
+
+  <div class="col-12">
+    <div class="app-breadcrumb">
+      <a href="{{ url_for('index') }}">Home</a><span class="sep">/</span>
+      <span class="current">생산 LOT 관리</span>
+    </div>
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">
+          <i class="bi bi-boxes" style="color:var(--mes-blue)"></i>생산 LOT 관리
+        </h1>
+        <div class="page-subtitle">LOT 등록 후, 각 섹션에서 개별적으로 가동 시작/종료합니다</div>
+      </div>
+      <div class="d-flex gap-2 flex-wrap">
+        <a href="{{ url_for('production_analysis') }}" class="btn btn-outline-primary btn-sm">
+          <i class="bi bi-speedometer2"></i> 섹션별 가동률 분석
+        </a>
+        <a href="{{ url_for('production_export') }}" class="btn btn-outline-success btn-sm">
+          <i class="bi bi-file-earmark-excel"></i> 엑셀 리포트
+        </a>
+        <a href="{{ url_for('production_settings') }}" class="btn btn-outline-secondary btn-sm">
+          <i class="bi bi-gear"></i> 휴식시간 설정
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 새 LOT 등록 -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header ch-blue">
+        <i class="bi bi-plus-circle-fill"></i> 새 LOT 등록
+      </div>
+      <div class="card-body">
+        <form method="post" action="{{ url_for('production_list') }}" class="row g-2 align-items-end">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="col-md-4">
+            <label class="form-label small fw-bold">모델명</label>
+            <input type="text" name="model_name" class="form-control" placeholder="예: 120H" required maxlength="50"
+                   list="modelNameList" autocomplete="off">
+            <datalist id="modelNameList">
+              {% for m in recent_models %}
+              <option value="{{ m }}">
+              {% endfor %}
+            </datalist>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small fw-bold">LOT번호</label>
+            <input type="text" name="lot_number" class="form-control" placeholder="예: 10221" required maxlength="50">
+          </div>
+          <div class="col-md-4">
+            <button type="submit" class="btn btn-primary w-100"><i class="bi bi-check-circle"></i> LOT 등록</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- LOT 이력 -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">LOT 이력</div>
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>모델명</th><th>LOT번호</th><th>등록시각</th><th>상태</th><th>평균 가동률</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for lot in lots %}
+            <tr>
+              <td class="fw-bold" style="white-space:nowrap">{{ lot.model_name }}</td>
+              <td style="white-space:nowrap">{{ lot.lot_number }}</td>
+              <td style="white-space:nowrap;font-size:0.85rem">{{ lot.started_at }}</td>
+              <td style="white-space:nowrap">
+                <span class="badge {% if lot.status == '진행중' %}bg-success{% else %}bg-secondary{% endif %}">
+                  {{ lot.status }}
+                </span>
+              </td>
+              <td style="white-space:nowrap">
+                {% if lot.avg_uptime_rate is not none %}
+                <span class="badge {% if lot.avg_uptime_rate >= 95 %}bg-success{% elif lot.avg_uptime_rate >= 85 %}bg-warning text-dark{% else %}bg-danger{% endif %}">
+                  {{ '%.1f'|format(lot.avg_uptime_rate) }}%
+                </span>
+                <span class="text-muted small">(완료 {{ lot.completed_sections }}개 섹션)</span>
+                {% else %}
+                <span class="text-muted small">완료된 섹션 없음</span>
+                {% endif %}
+              </td>
+              <td style="white-space:nowrap">
+                <a href="{{ url_for('production_detail', lot_id=lot.id) }}" class="btn btn-sm btn-outline-primary">
+                  섹션별 현황/가동률
+                </a>
+              </td>
+            </tr>
+            {% endfor %}
+            {% if not lots %}
+            {{ empty_row(6, '등록된 LOT이 없습니다.', icon='bi-boxes', hint='위에서 새 LOT을 등록해 보세요.') }}
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

@@ -1,0 +1,17 @@
+{# 표 안(td)에 쓰는 빈 상태. colspan 필수. #}
+{% macro empty_row(colspan, message, icon='bi-inbox', hint=none, py='py-5') %}
+<tr>
+  <td colspan="{{ colspan }}" class="text-center text-muted {{ py }}">
+    <i class="bi {{ icon }} fs-2 d-block mb-2"></i>{{ message }}
+    {% if hint %}<div class="small mt-1" style="opacity:.75">{{ hint }}</div>{% endif %}
+  </td>
+</tr>
+{% endmacro %}
+
+{# 리스트(ul/카드 등) 안에 쓰는 빈 상태. #}
+{% macro empty_block(message, icon='bi-inbox', hint=none, py='py-5') %}
+<div class="text-center text-muted {{ py }}">
+  <i class="bi {{ icon }} fs-2 d-block mb-2"></i>{{ message }}
+  {% if hint %}<div class="small mt-1" style="opacity:.75">{{ hint }}</div>{% endif %}
+</div>
+{% endmacro %}

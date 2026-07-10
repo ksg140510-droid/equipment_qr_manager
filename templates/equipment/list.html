@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% from '_macros.html' import empty_row %}
 {% block title %}설비 목록{% endblock %}
 
 {% block content %}
@@ -126,11 +127,7 @@
               </tr>
               {% endfor %}
               {% if not equipments %}
-              <tr>
-                <td colspan="6" class="text-center text-muted py-5">
-                  <i class="bi bi-inbox fs-2 d-block mb-2"></i>등록된 설비가 없습니다.
-                </td>
-              </tr>
+              {{ empty_row(6, '등록된 설비가 없습니다.', icon='bi-cpu', hint='설비를 추가하면 여기에 표시됩니다.') }}
               {% endif %}
             </tbody>
           </table>

@@ -1,0 +1,38 @@
+{% extends 'base.html' %}
+{% block title %}LOT 정보 수정{% endblock %}
+
+{% block content %}
+<div class="row mt-3 justify-content-center">
+  <div class="col-12 col-md-6">
+    <div class="app-breadcrumb">
+      <a href="{{ url_for('index') }}">Home</a><span class="sep">/</span>
+      <a href="{{ url_for('production_list') }}">생산 LOT 관리</a><span class="sep">/</span>
+      <a href="{{ url_for('production_detail', lot_id=lot.id) }}">{{ lot.model_name }} / {{ lot.lot_number }}</a><span class="sep">/</span>
+      <span class="current">수정</span>
+    </div>
+    <div class="page-header">
+      <h1 class="page-title"><i class="bi bi-pencil-square" style="color:var(--mes-blue)"></i>LOT 정보 수정</h1>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <form method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="mb-3">
+            <label class="form-label">모델명</label>
+            <input type="text" name="model_name" class="form-control" value="{{ lot.model_name }}" required maxlength="50">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">LOT번호</label>
+            <input type="text" name="lot_number" class="form-control" value="{{ lot.lot_number }}" required maxlength="50">
+          </div>
+          <div class="d-flex gap-2">
+            <a href="{{ url_for('production_detail', lot_id=lot.id) }}" class="btn btn-outline-secondary flex-fill">취소</a>
+            <button type="submit" class="btn btn-primary flex-fill"><i class="bi bi-check-circle-fill me-1"></i>저장</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

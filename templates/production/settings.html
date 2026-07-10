@@ -1,0 +1,58 @@
+{% extends 'base.html' %}
+{% block title %}휴식시간 설정{% endblock %}
+
+{% block content %}
+<div class="row mt-3 g-3">
+
+  <div class="col-12">
+    <div class="app-breadcrumb">
+      <a href="{{ url_for('index') }}">Home</a><span class="sep">/</span>
+      <a href="{{ url_for('production_list') }}">생산 LOT 관리</a><span class="sep">/</span>
+      <span class="current">휴식시간 설정</span>
+    </div>
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">
+          <i class="bi bi-gear" style="color:var(--mes-blue)"></i>휴식시간 설정
+        </h1>
+        <div class="page-subtitle">매일 반복되는 휴식시간을 설정하면, LOT 가동시간과 겹치는 구간은 가동률 계산에서 자동 제외됩니다</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-8">
+    <div class="card">
+      <div class="card-body">
+        <form method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          {% for sch in schedules %}
+          <div class="row g-2 align-items-end mb-3 pb-3 {% if not loop.last %}border-bottom{% endif %}">
+            <div class="col-md-4">
+              <label class="form-label fw-bold">{{ sch.name }}</label>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label small text-muted">시작</label>
+              <input type="time" name="start_{{ sch.id }}" class="form-control" value="{{ sch.start_time }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label small text-muted">종료</label>
+              <input type="time" name="end_{{ sch.id }}" class="form-control" value="{{ sch.end_time }}">
+            </div>
+          </div>
+          {% endfor %}
+          <div class="d-grid">
+            <button type="submit" class="btn btn-primary">
+              <i class="bi bi-check-circle-fill me-1"></i>저장
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+    <div class="text-muted small mt-2">
+      <i class="bi bi-info-circle me-1"></i>
+      해당 시간대가 없는 날(예: 잔업이 없는 날)은 LOT 가동시간과 겹치지 않으므로 자동으로 0으로 계산됩니다.
+    </div>
+  </div>
+
+</div>
+{% endblock %}

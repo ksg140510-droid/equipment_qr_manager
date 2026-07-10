@@ -1,0 +1,304 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import empty_row %}
+{% block title %}{{ ls.section }} - {{ lot.model_name }}/{{ lot.lot_number }} 가동 상세{% endblock %}
+
+{% block content %}
+<style>
+  .tl-wrap { position:relative; }
+  .tl-label-row { position:relative; height:20px; }
+  .tl-seg-label {
+    position:absolute; top:0; transform:translateX(-50%);
+    font-size:.72rem; font-weight:700; color:var(--mes-danger);
+    white-space:nowrap; max-width:180px; overflow:hidden; text-overflow:ellipsis;
+  }
+  .tl-seg-label.downtime { color:var(--mes-warning); }
+  .tl-bar { display:flex; height:40px; border-radius:6px; overflow:hidden; border:1px solid var(--mes-border); }
+  .tl-seg { height:100%; box-sizing:border-box; border-right:2px solid #fff; }
+  .tl-seg:last-child { border-right:none; }
+  .tl-seg.normal   { background:var(--mes-success); }
+  .tl-seg.break    { background:var(--mes-muted); }
+  .tl-seg.downtime { background:var(--mes-warning); cursor:pointer; }
+  .tl-seg.fault    { background:var(--mes-danger); cursor:pointer; }
+  .tl-axis { display:flex; justify-content:space-between; font-size:.72rem; color:var(--mes-muted); margin-top:4px; }
+  .tl-tooltip {
+    position:absolute; z-index:20; background:var(--mes-navy); color:#fff;
+    padding:6px 10px; border-radius:6px; font-size:.78rem; pointer-events:none;
+    box-shadow:var(--mes-shadow); max-width:260px;
+  }
+</style>
+<div class="row mt-3 g-3">
+
+  <div class="col-12">
+    <div class="app-breadcrumb">
+      <a href="{{ url_for('index') }}">Home</a><span class="sep">/</span>
+      <a href="{{ url_for('production_list') }}">생산 LOT 관리</a><span class="sep">/</span>
+      <a href="{{ url_for('production_detail', lot_id=lot.id) }}">{{ lot.model_name }} / {{ lot.lot_number }}</a><span class="sep">/</span>
+      <span class="current">{{ ls.section }}</span>
+    </div>
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">
+          <i class="bi bi-cpu" style="color:var(--mes-blue)"></i>{{ ls.section }}
+        </h1>
+        <div class="page-subtitle">
+          {{ lot.model_name }} / {{ lot.lot_number }}
+          {% if ls.status == '진행중' %}
+            <span class="badge bg-success">진행중 (실시간 미리보기)</span>
+          {% elif ls.status == '일시정지' %}
+            <span class="badge bg-warning text-dark">일시정지 중 (퇴근 등)</span>
+          {% else %}
+            <span class="badge bg-secondary">완료</span>
+          {% endif %}
+        </div>
+      </div>
+      <a href="{{ url_for('production_section_export', lot_id=lot.id, section=ls.section) }}" class="btn btn-outline-success btn-sm">
+        <i class="bi bi-file-earmark-excel"></i> 이 섹션 엑셀 내보내기
+      </a>
+    </div>
+  </div>
+
+  <div class="col-12">
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="row g-3 text-center">
+          <div class="col-6 col-md-3">
+            <div class="text-muted small">시작</div>
+            <div class="fw-bold" style="font-size:.9rem">{{ ls.started_at }}</div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="text-muted small">종료</div>
+            <div class="fw-bold" style="font-size:.9rem">{{ ls.ended_at or '진행중' }}</div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="text-muted small">가동대상시간</div>
+            <div class="fw-bold" id="stat-available">{{ stats.available_seconds // 60 }}분</div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="text-muted small">설비가동률</div>
+            <div class="fs-4 fw-bold {% if stats.uptime_rate >= 95 %}text-success{% elif stats.uptime_rate >= 85 %}text-warning{% else %}text-danger{% endif %}" id="stat-uptime">
+              {{ '%.1f'|format(stats.uptime_rate) }}%
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 가동 타임라인 -->
+  <div class="col-12">
+    <div class="card mb-3">
+      <div class="card-header d-flex align-items-center justify-content-between">
+        <span><i class="bi bi-clock-history me-1"></i>가동 타임라인</span>
+        <span class="text-muted small" id="tl-updated"></span>
+      </div>
+      <div class="card-body">
+        <div class="d-flex gap-3 mb-3 small flex-wrap">
+          <span><i class="bi bi-square-fill" style="color:var(--mes-success)"></i> 정상가동</span>
+          <span><i class="bi bi-square-fill" style="color:var(--mes-muted)"></i> 휴식/퇴근</span>
+          <span><i class="bi bi-square-fill" style="color:var(--mes-warning)"></i> 가동정지(다운타임)</span>
+          <span><i class="bi bi-square-fill" style="color:var(--mes-danger)"></i> 고장정지</span>
+        </div>
+        <div class="tl-wrap">
+          <div class="tl-label-row" id="tl-label-row"></div>
+          <div class="tl-bar" id="tl-bar"></div>
+          <div class="tl-axis">
+            <span id="tl-start"></span>
+            <span id="tl-end">{% if ls.status == '진행중' %}현재{% endif %}</span>
+          </div>
+          <div class="tl-tooltip" id="tl-tooltip" style="display:none"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">
+        고장 내역 ({{ stats.fault_count }}건, 총 {{ stats.fault_seconds // 60 }}분)
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>발생시각</th><th>완료시각</th><th>조치시간</th><th>증상</th><th>원인</th><th>작업자</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for f in stats.faults %}
+            <tr>
+              <td style="white-space:nowrap;font-size:0.85rem">{{ f.occurred_at }}</td>
+              <td style="white-space:nowrap;font-size:0.85rem">
+                {% if f.ongoing %}<span class="badge bg-warning text-dark">미완료</span>{% else %}{{ f.completed_at }}{% endif %}
+              </td>
+              <td class="fw-bold" style="white-space:nowrap">{{ f.duration_minutes }}분{% if f.ongoing %}<span class="text-muted small"> (진행중)</span>{% endif %}</td>
+              <td style="white-space:nowrap">{{ f.symptom or '-' }}</td>
+              <td style="white-space:nowrap">{{ f.cause or '-' }}</td>
+              <td style="white-space:nowrap">{{ f.worker or '-' }}</td>
+            </tr>
+            {% endfor %}
+            {% if not stats.faults %}
+            {{ empty_row(6, '이 구간 동안 고장이 없었습니다.', icon='bi-check-circle', py='py-4') }}
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">
+        가동정지 내역 ({{ stats.pause_count }}건, 총 {{ stats.pause_downtime_seconds // 60 }}분)
+        <span class="text-muted small fw-normal">— 퇴근을 제외한 모든 정지 사유는 설비가동률에 반영됩니다</span>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>정지시각</th><th>재개시각</th><th>정지시간</th><th>사유</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in stats.pauses %}
+            <tr>
+              <td style="white-space:nowrap;font-size:0.85rem">{{ p.paused_at }}</td>
+              <td style="white-space:nowrap;font-size:0.85rem">
+                {% if p.ongoing %}<span class="badge bg-warning text-dark">정지중</span>{% else %}{{ p.resumed_at }}{% endif %}
+              </td>
+              <td class="fw-bold" style="white-space:nowrap">{{ p.duration_minutes }}분{% if p.ongoing %}<span class="text-muted small"> (진행중)</span>{% endif %}</td>
+              <td style="white-space:nowrap">{{ p.reason }}</td>
+            </tr>
+            {% endfor %}
+            {% if not stats.pauses %}
+            {{ empty_row(4, '이 구간 동안 가동정지(퇴근 제외)가 없었습니다.', icon='bi-check-circle', py='py-4') }}
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+  const barEl = document.getElementById('tl-bar');
+  const labelRowEl = document.getElementById('tl-label-row');
+  const tooltipEl = document.getElementById('tl-tooltip');
+  const wrapEl = document.querySelector('.tl-wrap');
+  const startEl = document.getElementById('tl-start');
+  const endEl = document.getElementById('tl-end');
+  const updatedEl = document.getElementById('tl-updated');
+  const isRunning = {{ (ls.status == '진행중') | tojson }};
+  const timelineUrl = "{{ url_for('production_section_timeline_json', lot_id=lot.id, section=ls.section) }}";
+  const typeLabels = {normal: '정상가동', break: '휴식/퇴근', downtime: '가동정지', fault: '고장정지'};
+  const labeledTypes = {downtime: true, fault: true};
+
+  function fmtTime(s) { return s.slice(11, 16); }
+
+  function segCenterPct(segments, idx) {
+    let acc = 0;
+    for (let i = 0; i < idx; i++) acc += segments[i].pct;
+    return acc + segments[idx].pct / 2;
+  }
+
+  // 라벨이 화면(타임라인 폭) 밖으로 넘치면 안쪽으로 밀어넣는다.
+  // (마지막 구간처럼 중심이 오른쪽 끝에 가까우면 %기준 중앙정렬만으로는 텍스트가 잘려나가므로,
+  //  실제 렌더링된 위치를 측정해서 보정한다.)
+  function clampLabels() {
+    const wrapRect = labelRowEl.getBoundingClientRect();
+    if (wrapRect.width === 0) return;
+    labelRowEl.querySelectorAll('.tl-seg-label').forEach(function(lbl) {
+      lbl.style.transform = 'translateX(-50%)';
+      const rect = lbl.getBoundingClientRect();
+      let shift = 0;
+      if (rect.right > wrapRect.right) {
+        shift = wrapRect.right - rect.right;
+      } else if (rect.left < wrapRect.left) {
+        shift = wrapRect.left - rect.left;
+      }
+      if (shift !== 0) {
+        lbl.style.transform = 'translateX(calc(-50% + ' + shift + 'px))';
+      }
+    });
+  }
+
+  function render(data) {
+    barEl.innerHTML = '';
+    labelRowEl.innerHTML = '';
+    data.segments.forEach(function(seg, idx) {
+      const div = document.createElement('div');
+      div.className = 'tl-seg ' + seg.type;
+      div.style.width = Math.max(seg.pct, 0.3) + '%';
+      const tipText = typeLabels[seg.type] + ' · ' + fmtTime(seg.start) + '~' + fmtTime(seg.end)
+                    + ' (' + Math.round(seg.duration_seconds / 60) + '분)'
+                    + (labeledTypes[seg.type] ? ' · ' + seg.label : '');
+      div.addEventListener('mouseenter', function(e) { showTooltip(e, tipText); });
+      div.addEventListener('mousemove', moveTooltip);
+      div.addEventListener('mouseleave', hideTooltip);
+      div.addEventListener('click', function(e) {
+        e.stopPropagation();
+        if (tooltipEl.style.display === 'block' && tooltipEl.dataset.segIdx === String(idx)) {
+          hideTooltip();
+        } else {
+          tooltipEl.dataset.segIdx = String(idx);
+          showTooltip(e, tipText);
+        }
+      });
+      barEl.appendChild(div);
+
+      if (labeledTypes[seg.type] && seg.pct >= 5) {
+        const lbl = document.createElement('div');
+        lbl.className = 'tl-seg-label ' + seg.type;
+        lbl.style.left = segCenterPct(data.segments, idx) + '%';
+        lbl.textContent = seg.label;
+        lbl.title = seg.label;
+        labelRowEl.appendChild(lbl);
+      }
+    });
+    clampLabels();
+    startEl.textContent = data.window_start;
+    if (!isRunning) endEl.textContent = data.window_end;
+    updatedEl.textContent = '마지막 갱신 ' + new Date().toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+    if (data.uptime_rate !== undefined) {
+      const upEl = document.getElementById('stat-uptime');
+      upEl.textContent = data.uptime_rate.toFixed(1) + '%';
+      upEl.className = 'fs-4 fw-bold ' + (data.uptime_rate >= 95 ? 'text-success' : data.uptime_rate >= 85 ? 'text-warning' : 'text-danger');
+    }
+    if (data.available_seconds !== undefined) {
+      document.getElementById('stat-available').textContent = Math.floor(data.available_seconds / 60) + '분';
+    }
+  }
+
+  function showTooltip(e, text) {
+    tooltipEl.textContent = text;
+    tooltipEl.style.display = 'block';
+    moveTooltip(e);
+  }
+  function moveTooltip(e) {
+    const rect = wrapEl.getBoundingClientRect();
+    tooltipEl.style.left = (e.clientX - rect.left + 12) + 'px';
+    tooltipEl.style.top = (e.clientY - rect.top - 34) + 'px';
+  }
+  function hideTooltip() { tooltipEl.style.display = 'none'; delete tooltipEl.dataset.segIdx; }
+
+  document.addEventListener('click', function(e) {
+    if (!wrapEl.contains(e.target)) hideTooltip();
+  });
+
+  function fetchAndRender() {
+    fetch(timelineUrl).then(function(r) { return r.ok ? r.json() : null; }).then(function(data) {
+      if (data && data.ok) render(data);
+    }).catch(function() {});
+  }
+
+  render({{ timeline | tojson }});
+
+  if (isRunning) {
+    setInterval(fetchAndRender, 30000);
+  }
+})();
+</script>
+{% endblock %}
