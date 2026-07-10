@@ -65,6 +65,9 @@
           <div class="text-muted mt-1" style="font-size:0.62rem;letter-spacing:.3px">
             QR 스캔
           </div>
+          <div class="d-print-none text-muted" style="font-size:0.6rem">
+            리셋: {{ eq.qr_reset_at.split(' ')[0] if eq.qr_reset_at else '-' }}
+          </div>
         </div>
       </div>
       {% endfor %}

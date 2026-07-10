@@ -69,11 +69,26 @@
             <div class="text-muted small">종료</div>
             <div class="fw-bold" style="font-size:.9rem">{{ ls.ended_at or '진행중' }}</div>
           </div>
-          <div class="col-6 col-md-3">
+        </div>
+        <hr class="my-3">
+        <div class="row g-3 text-center">
+          <div class="col-6 col-md">
             <div class="text-muted small">가동대상시간</div>
             <div class="fw-bold" id="stat-available">{{ stats.available_seconds // 60 }}분</div>
           </div>
-          <div class="col-6 col-md-3">
+          <div class="col-6 col-md">
+            <div class="text-muted small">고장시간</div>
+            <div class="fw-bold text-danger" id="stat-fault">{{ stats.fault_seconds // 60 }}분</div>
+          </div>
+          <div class="col-6 col-md">
+            <div class="text-muted small">정지시간(가동정지)</div>
+            <div class="fw-bold" style="color:var(--mes-warning)" id="stat-pause">{{ stats.pause_downtime_seconds // 60 }}분</div>
+          </div>
+          <div class="col-6 col-md">
+            <div class="text-muted small">총 가동정지시간</div>
+            <div class="fw-bold" id="stat-total-down">{{ (stats.fault_seconds + stats.pause_downtime_seconds) // 60 }}분</div>
+          </div>
+          <div class="col-6 col-md">
             <div class="text-muted small">설비가동률</div>
             <div class="fs-4 fw-bold {% if stats.uptime_rate >= 95 %}text-success{% elif stats.uptime_rate >= 85 %}text-warning{% else %}text-danger{% endif %}" id="stat-uptime">
               {{ '%.1f'|format(stats.uptime_rate) }}%
@@ -270,6 +285,16 @@
     if (data.available_seconds !== undefined) {
       document.getElementById('stat-available').textContent = Math.floor(data.available_seconds / 60) + '분';
     }
+    if (data.fault_seconds !== undefined) {
+      document.getElementById('stat-fault').textContent = Math.floor(data.fault_seconds / 60) + '분';
+    }
+    if (data.pause_downtime_seconds !== undefined) {
+      document.getElementById('stat-pause').textContent = Math.floor(data.pause_downtime_seconds / 60) + '분';
+    }
+    if (data.fault_seconds !== undefined && data.pause_downtime_seconds !== undefined) {
+      document.getElementById('stat-total-down').textContent =
+        Math.floor((data.fault_seconds + data.pause_downtime_seconds) / 60) + '분';
+    }
   }
 
   function showTooltip(e, text) {
@@ -277,10 +302,26 @@
     tooltipEl.style.display = 'block';
     moveTooltip(e);
   }
+  // 마우스 커서 오른쪽 아래에 고정 오프셋으로만 붙이면, 커서가 컨테이너 오른쪽/아래 끝
+  // 근처에 있을 때 툴팁이 화면 밖으로 삐져나가 텍스트가 잘린다. 실제 렌더링된 툴팁
+  // 크기를 재서 컨테이너 경계를 넘으면 반대쪽(왼쪽/위)으로 뒤집어 붙인다.
   function moveTooltip(e) {
     const rect = wrapEl.getBoundingClientRect();
-    tooltipEl.style.left = (e.clientX - rect.left + 12) + 'px';
-    tooltipEl.style.top = (e.clientY - rect.top - 34) + 'px';
+    const offsetX = e.clientX - rect.left;
+    const offsetY = e.clientY - rect.top;
+    const tw = tooltipEl.offsetWidth;
+    const th = tooltipEl.offsetHeight;
+
+    let left = offsetX + 12;
+    if (left + tw > rect.width) left = offsetX - tw - 12;
+    if (left < 0) left = Math.max(0, rect.width - tw);
+
+    let top = offsetY - 34;
+    if (top < 0) top = offsetY + 16;
+    if (top + th > rect.height) top = Math.max(0, rect.height - th);
+
+    tooltipEl.style.left = left + 'px';
+    tooltipEl.style.top = top + 'px';
   }
   function hideTooltip() { tooltipEl.style.display = 'none'; delete tooltipEl.dataset.segIdx; }
 
@@ -299,6 +340,14 @@
   if (isRunning) {
     setInterval(fetchAndRender, 30000);
   }
+
+  // 창 크기 변경(모바일 회전, 사이드바 접기/펼치기 등)으로 타임라인 폭이 바뀌면
+  // 라벨 위치를 다시 계산해서 화면 밖으로 밀려나지 않게 한다.
+  let resizeTimer = null;
+  window.addEventListener('resize', function() {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(clampLabels, 150);
+  });
 })();
 </script>
 {% endblock %}

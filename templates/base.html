@@ -32,8 +32,8 @@
     <a href="{{ url_for('logout') }}" class="d-flex align-items-center ms-auto me-1 text-decoration-none"
        style="color:#a5d6a7;font-size:0.78rem;font-weight:700;max-width:96px"
        onclick="return confirm('로그아웃 하시겠습니까?')">
-      <i class="bi bi-person-check-fill me-1"></i>
-      <span class="text-truncate">{{ session.get('actor_name') }}</span>
+      <i class="bi bi-person-check-fill me-1" style="flex-shrink:0"></i>
+      <span class="text-truncate min-w-0">{{ session.get('actor_name') }}</span>
     </a>
     {% endif %}
     <button class="btn btn-link {% if not session.get('edit_authorized') %}ms-auto{% endif %} me-1" data-bs-toggle="modal" data-bs-target="#backupModal"

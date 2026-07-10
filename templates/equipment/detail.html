@@ -41,6 +41,16 @@
             <td>{{ eq.location or '-' }}</td>
           </tr>
           <tr>
+            <td>QR 최종 리셋</td>
+            <td>
+              {% if eq.qr_reset_at %}
+                <span class="text-muted">{{ eq.qr_reset_at }}</span>
+              {% else %}
+                <span class="text-muted">-</span>
+              {% endif %}
+            </td>
+          </tr>
+          <tr>
             <td>총 고장</td>
             <td>
               <span class="badge bg-grade-a fs-6">{{ fault_count }}건</span>

@@ -265,5 +265,19 @@ def init_db():
     except Exception:
         pass
 
+    # equipment.qr_reset_at / qr_last_ip 컬럼 마이그레이션
+    # (QR코드가 실제로 재생성될 때마다 시각을 기록해, 화면에 표시된 QR과 이미 인쇄된 QR이
+    # 서로 달라졌을 수 있음을 다른 작업자들도 알 수 있게 함)
+    try:
+        c.execute("ALTER TABLE equipment ADD COLUMN qr_reset_at DATETIME")
+        conn.commit()
+    except Exception:
+        pass
+    try:
+        c.execute("ALTER TABLE equipment ADD COLUMN qr_last_ip TEXT")
+        conn.commit()
+    except Exception:
+        pass
+
     conn.close()
     print("DB 초기화 완료:", DB_PATH)

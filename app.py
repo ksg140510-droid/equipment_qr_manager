@@ -26,7 +26,9 @@ from openpyxl.chart.marker import DataPoint
 from openpyxl.chart.shapes import GraphicalProperties
 from openpyxl.drawing.line import LineProperties
 from openpyxl.drawing.text import Paragraph, ParagraphProperties, CharacterProperties
+from openpyxl.chart.text import RichText
 from openpyxl.worksheet.page import PageMargins
+from openpyxl.worksheet.pagebreak import Break
 from openpyxl.drawing.spreadsheet_drawing import TwoCellAnchor, AnchorMarker
 from openpyxl.chart.layout import Layout, ManualLayout
 from werkzeug.utils import secure_filename, safe_join
@@ -874,6 +876,12 @@ def generate_qr(eq_id, host_url=None):
     img = qr.make_image(fill_color='black', back_color='white')
     path = os.path.join(QR_DIR, f'eq_{eq_id}.png')
     img.save(path)
+    # 이 함수는 최초 생성(파일 없음) 또는 관리자의 명시적 "QR 재생성" 클릭 때만 호출되므로,
+    # 호출될 때마다 "실제로 QR이 (재)생성된 시각"으로 기록해도 된다 (조회만으로는 갱신되지 않음).
+    db = get_db()
+    db.execute("UPDATE equipment SET qr_reset_at=datetime('now','localtime'), qr_last_ip=? WHERE id=?", (ip, eq_id))
+    db.commit()
+    db.close()
     return path
 
 
@@ -1874,16 +1882,23 @@ def production_analysis_export():
     rates = [r['avg_uptime_rate'] for r in summary if r['avg_uptime_rate'] is not None]
     overall_rate = round(sum(rates) / len(rates), 1) if rates else None
     total_faults = sum(r['total_fault_count'] for r in summary)
-    total_downtime = sum(r['total_downtime_minutes'] for r in summary)
+    total_fault_min = sum(r['total_fault_minutes'] for r in summary)
+    total_pause_min = sum(r['total_downtime_minutes'] for r in summary)
+    total_stop_min = total_fault_min + total_pause_min
     total_sections = sum(r['lot_section_count'] for r in summary)
+    # "고장"과 "정지(점검/자재대기 등)"는 표에서는 사유별로 나눠 보여주지만, 결국 둘 다
+    # 설비가 멈춘 시간이라는 점에서 같은 범주다. 이를 KPI 카드 맨 앞에 합계로 보여줘서
+    # 두 표가 서로 무관한 별개 항목처럼 보이지 않고 "설비정지"라는 하나의 상위 개념 아래
+    # 묶여 있다는 걸 한눈에 알 수 있게 한다.
     row = xlsx_kpi_cards(ws, row, NCOL, [
         ('전체 평균가동률', f'{overall_rate}%' if overall_rate is not None else '-',
          _XLSX_COLOR_SUCCESS if (overall_rate is not None and overall_rate >= 95) else
          _XLSX_COLOR_WARNING if (overall_rate is not None and overall_rate >= 85) else
          (_XLSX_COLOR_DANGER if overall_rate is not None else None)),
+        ('총 설비정지시간 (고장+정지)', f'{total_stop_min}분', _XLSX_COLOR_DANGER if total_stop_min else None),
+        ('└ 고장', f'{total_fault_min}분 ({total_faults}건)', None),
+        ('└ 정지 (점검·자재대기 등)', f'{total_pause_min}분', None),
         ('총 가동구간수', f'{total_sections}건', None),
-        ('총 고장건수', f'{total_faults}건', _XLSX_COLOR_DANGER if total_faults else None),
-        ('총 정지시간', f'{total_downtime}분', _XLSX_COLOR_WARNING if total_downtime else None),
     ])
 
     row = xlsx_block_heading(ws, row, NCOL, '섹션별 요약')
@@ -1913,7 +1928,7 @@ def production_analysis_export():
                    series_colors=[_XLSX_COLOR_DANGER, _XLSX_COLOR_WARNING], num_cols=NCOL)
     row = chart_end2 + 2
 
-    row = xlsx_block_heading(ws, row, NCOL, f'섹션별 상세 ({len(detail_rows)}개 가동구간, LOT별)')
+    row = xlsx_block_heading(ws, row, NCOL, f'섹션별 상세 ({len(detail_rows)}개 가동구간, LOT별)', page_break_before=True)
     detail_table_rows = [[
         r['section'], r['model_name'], r['lot_number'], r['status'],
         r['started_at'], r['ended_at'] or '(진행중)', r['uptime_rate'], r['fault_count'],
@@ -1983,14 +1998,19 @@ def production_export():
     fault_durations = [d for d in (_dur_minutes(f['occurred_at'], f['completed_at']) for f in faults) if d is not None]
     pause_durations = [d for d in (_dur_minutes(p['paused_at'], p['resumed_at']) for p in pauses) if d is not None]
     mttr = round(sum(fault_durations) / len(fault_durations), 1) if fault_durations else None
-    total_downtime = sum(pause_durations)
+    total_fault_min = sum(fault_durations)
+    total_pause_min = sum(pause_durations)
+    total_stop_min = total_fault_min + total_pause_min
+    # 고장·정지(점검/자재대기 등)는 표는 나눠서 보여주되, 결국 둘 다 설비가 멈춘 시간이므로
+    # 합계를 맨 앞에 둬서 두 표가 "설비정지"라는 하나의 상위 개념으로 묶여 있음을 보여준다.
     row = xlsx_kpi_cards(ws, row, NCOL, [
         ('전체 평균가동률', f'{overall_rate}%' if overall_rate is not None else '-',
          _XLSX_COLOR_SUCCESS if (overall_rate is not None and overall_rate >= 95) else
          _XLSX_COLOR_WARNING if (overall_rate is not None and overall_rate >= 85) else
          (_XLSX_COLOR_DANGER if overall_rate is not None else None)),
-        ('총 고장건수', f'{len(faults)}건', _XLSX_COLOR_DANGER if faults else None),
-        ('총 정지시간', f'{total_downtime}분', _XLSX_COLOR_WARNING if total_downtime else None),
+        ('총 설비정지시간 (고장+정지)', f'{total_stop_min}분', _XLSX_COLOR_DANGER if total_stop_min else None),
+        ('└ 고장', f'{total_fault_min}분 ({len(faults)}건)', None),
+        ('└ 정지 (점검·자재대기 등)', f'{total_pause_min}분', None),
         ('평균 조치시간(MTTR)', f'{mttr}분' if mttr is not None else '-', None),
     ])
 
@@ -2003,28 +2023,39 @@ def production_export():
                    point_colors=point_colors, num_cols=NCOL)
     row = chart_end + 2
 
-    row = xlsx_block_heading(ws, row, NCOL, '섹션별 상세 (LOT × 섹션)')
-    section_rows, section_fills = [], []
+    row = xlsx_block_heading(ws, row, NCOL, '섹션별 상세 (섹션별로 묶어서 표시)', page_break_before=True)
+    # LOT을 기준으로 나열하면 같은 섹션의 흐름을 한눈에 보기 어려워서, 섹션(SECTIONS 순서)을
+    # 먼저 묶고 그 안에서 LOT별로 나열한다 — "이 섹션이 전체적으로 어떤지"를 바로 볼 수 있게.
+    rows_by_section = {s: [] for s in SECTIONS}
+    fills_by_section = {s: [] for s in SECTIONS}
     for lot in lots:
         sections = db.execute(
             "SELECT * FROM production_lot_sections WHERE lot_id=? ORDER BY id", (lot['id'],)
         ).fetchall()
         for ls in sections:
             stats = compute_section_stats(db, ls['id'], lot_section_row=ls)
-            section_fills.append('E8F5E9' if stats['uptime_rate'] >= 95 else ('FFFDE0' if stats['uptime_rate'] >= 85 else 'FFE0E0'))
-            section_rows.append([
+            fill = 'E8F5E9' if stats['uptime_rate'] >= 95 else ('FFFDE0' if stats['uptime_rate'] >= 85 else 'FFE0E0')
+            data_row = [
                 lot['model_name'], lot['lot_number'], ls['section'], ls['status'],
                 ls['started_at'], ls['ended_at'] or '(진행중)',
                 stats['available_seconds'] // 60, stats['fault_seconds'] // 60,
                 stats['pause_downtime_seconds'] // 60, stats['uptime_rate'],
-            ])
-    _, _, row = xlsx_table_at(ws, row,
-        ['모델명', 'LOT번호', '섹션', '상태', '시작', '종료', '가동대상(분)', '고장(분)', '정지-다운타임(분)', '가동률(%)'],
-        [16, 14, 12, 10, 18, 18, 12, 10, 16, 12], section_rows, percent_cols=[10], fill_colors=section_fills,
-        total_cols=NCOL)
+            ]
+            rows_by_section.setdefault(ls['section'], []).append(data_row)
+            fills_by_section.setdefault(ls['section'], []).append(fill)
+
+    for section in SECTIONS:
+        rows_here = rows_by_section.get(section, [])
+        if not rows_here:
+            continue
+        row = xlsx_subheading(ws, row, NCOL, f'{section} ({len(rows_here)}개 가동구간)')
+        _, _, row = xlsx_table_at(ws, row,
+            ['모델명', 'LOT번호', '섹션', '상태', '시작', '종료', '가동대상(분)', '고장(분)', '정지-다운타임(분)', '가동률(%)'],
+            [16, 14, 12, 10, 18, 18, 12, 10, 16, 12], rows_here, percent_cols=[10],
+            fill_colors=fills_by_section.get(section, []), total_cols=NCOL)
     row += 1
 
-    row = xlsx_block_heading(ws, row, NCOL, f'고장 내역 ({len(faults)}건) — 발생원인 · 조치시간')
+    row = xlsx_block_heading(ws, row, NCOL, f'설비정지 내역 ① 고장 ({len(faults)}건) — 발생원인 · 조치시간', page_break_before=True)
     fault_rows = []
     for f in faults:
         occ = _parse_dt(f['occurred_at'])
@@ -2036,13 +2067,13 @@ def production_export():
             f['symptom'] or '', f['cause'] or '', f['worker'] or '',
         ])
     hdr3, last3, row = xlsx_table_at(ws, row,
-        ['모델명', 'LOT번호', '섹션', '발생시각', '완료시각', '조치시간(분)', '증상', '원인', '작업자'],
+        ['모델명', 'LOT번호', '섹션', '발생시각', '완료시각', '조치시간(분)', '증상', '원인', '조치자'],
         [16, 14, 12, 18, 18, 12, 20, 25, 10], fault_rows, total_cols=NCOL)
     if fault_rows:
         _, row = xlsx_total_row(ws, hdr3 + 1, last3, label_col=1, label=f'합계 ({len(fault_rows)}건)', value_cols=[6])
     row += 1
 
-    row = xlsx_block_heading(ws, row, NCOL, f'가동정지 내역 ({len(pauses)}건) — 정지시간 · 정지사유')
+    row = xlsx_block_heading(ws, row, NCOL, f'설비정지 내역 ② 기타사유 - 점검·자재대기·교체 등 ({len(pauses)}건) — 정지시간 · 정지사유', page_break_before=True)
     pause_rows = []
     for p in pauses:
         paused = _parse_dt(p['paused_at'])
@@ -2057,6 +2088,35 @@ def production_export():
         [16, 14, 12, 18, 18, 12, 14], pause_rows, total_cols=NCOL)
     if pause_rows:
         xlsx_total_row(ws, hdr4 + 1, last4, label_col=1, label=f'합계 ({len(pause_rows)}건)', value_cols=[6])
+    row += 1
+
+    row = _xlsx_add_stop_reason_chart(ws, row, NCOL, total_fault_min, pause_rows, reason_col=7, duration_col=6,
+                                    page_break_before=True)
+
+    # 최종 페이지: LOT 하나하나가 아니라 "섹션이 전체적으로 어떤 상태인가"를 전 LOT 통합으로
+    # 다시 한번 요약해서, 리포트를 끝까지 본 사람이 결론(섹션별 종합)을 바로 확인할 수 있게 한다.
+    analysis_summary, _ = _compute_section_analysis(db)
+    row = xlsx_block_heading(ws, row, NCOL, '섹션별 종합 요약 (전체 LOT 통합)', page_break_before=True)
+    final_rows, final_fills, final_point_colors = [], [], []
+    for r in analysis_summary:
+        rate = r['avg_uptime_rate']
+        final_fills.append('E8F5E9' if (rate is not None and rate >= 95) else
+                           ('FFFDE0' if (rate is not None and rate >= 85) else 'FFE0E0') if rate is not None else None)
+        final_point_colors.append(
+            _XLSX_COLOR_SUCCESS if (rate is not None and rate >= 95) else
+            _XLSX_COLOR_WARNING if (rate is not None and rate >= 85) else
+            _XLSX_COLOR_DANGER
+        )
+        final_rows.append([
+            r['section'], r['lot_section_count'], rate if rate is not None else '',
+            r['total_fault_minutes'], r['total_fault_count'], r['total_downtime_minutes'],
+        ])
+    hdr5, last5, row = xlsx_table_at(ws, row,
+        ['섹션', '가동구간수', '평균가동률(%)', '총고장시간(분)', '총고장건수', '총정지시간(분)'],
+        [14, 12, 14, 14, 12, 14], final_rows, percent_cols=[3], fill_colors=final_fills, total_cols=NCOL)
+    row = xlsx_bar_chart(ws, '섹션별 평균가동률(%)', cat_col=1, data_cols=[3], header_row=hdr5, last_data_row=last5,
+                   start_col=1, anchor_row=row, x_title='섹션', y_percent=True,
+                   point_colors=final_point_colors, num_cols=NCOL) + 1
 
     xlsx_finalize_report_sheet(ws, report_title=report_title, tab_color='1F4E79', freeze_row=3)
 
@@ -2159,14 +2219,17 @@ def production_lot_export(lot_id):
     fault_durations = [d for d in (_dur_minutes(f['occurred_at'], f['completed_at']) for f in faults) if d is not None]
     pause_durations = [d for d in (_dur_minutes(p['paused_at'], p['resumed_at']) for p in pauses) if d is not None]
     mttr = round(sum(fault_durations) / len(fault_durations), 1) if fault_durations else None
-    total_downtime = sum(pause_durations)
+    total_fault_min = sum(fault_durations)
+    total_pause_min = sum(pause_durations)
+    total_stop_min = total_fault_min + total_pause_min
     row = xlsx_kpi_cards(ws, row, NCOL, [
         ('이 LOT 평균가동률', f'{lot_rate}%' if lot_rate is not None else '-',
          _XLSX_COLOR_SUCCESS if (lot_rate is not None and lot_rate >= 95) else
          _XLSX_COLOR_WARNING if (lot_rate is not None and lot_rate >= 85) else
          (_XLSX_COLOR_DANGER if lot_rate is not None else None)),
-        ('총 고장건수', f'{len(faults)}건', _XLSX_COLOR_DANGER if faults else None),
-        ('총 정지시간', f'{total_downtime}분', _XLSX_COLOR_WARNING if total_downtime else None),
+        ('총 설비정지시간 (고장+정지)', f'{total_stop_min}분', _XLSX_COLOR_DANGER if total_stop_min else None),
+        ('└ 고장', f'{total_fault_min}분 ({len(faults)}건)', None),
+        ('└ 정지 (점검·자재대기 등)', f'{total_pause_min}분', None),
         ('평균 조치시간(MTTR)', f'{mttr}분' if mttr is not None else '-', None),
     ])
 
@@ -2183,7 +2246,7 @@ def production_lot_export(lot_id):
                    series_colors=[_XLSX_COLOR_DANGER, _XLSX_COLOR_WARNING], num_cols=NCOL)
     row = chart_end2 + 2
 
-    row = xlsx_block_heading(ws, row, NCOL, f'고장 내역 ({len(faults)}건) — 발생원인 · 조치시간')
+    row = xlsx_block_heading(ws, row, NCOL, f'설비정지 내역 ① 고장 ({len(faults)}건) — 발생원인 · 조치시간', page_break_before=True)
     fault_rows = []
     for f in faults:
         occ = _parse_dt(f['occurred_at'])
@@ -2194,13 +2257,13 @@ def production_lot_export(lot_id):
             duration, f['symptom'] or '', f['cause'] or '', f['worker'] or '',
         ])
     hdr2, last2, row = xlsx_table_at(ws, row,
-        ['섹션', '발생시각', '완료시각', '조치시간(분)', '증상', '원인', '작업자'],
+        ['섹션', '발생시각', '완료시각', '조치시간(분)', '증상', '원인', '조치자'],
         [12, 18, 18, 12, 20, 25, 10], fault_rows, total_cols=NCOL)
     if fault_rows:
         _, row = xlsx_total_row(ws, hdr2 + 1, last2, label_col=1, label=f'합계 ({len(fault_rows)}건)', value_cols=[4])
     row += 1
 
-    row = xlsx_block_heading(ws, row, NCOL, f'가동정지 내역 ({len(pauses)}건) — 정지시간 · 정지사유')
+    row = xlsx_block_heading(ws, row, NCOL, f'설비정지 내역 ② 기타사유 - 점검·자재대기·교체 등 ({len(pauses)}건) — 정지시간 · 정지사유', page_break_before=True)
     pause_rows = []
     for p in pauses:
         paused = _parse_dt(p['paused_at'])
@@ -2211,6 +2274,10 @@ def production_lot_export(lot_id):
                                       [12, 18, 18, 12, 14], pause_rows, total_cols=NCOL)
     if pause_rows:
         xlsx_total_row(ws, hdr3 + 1, last3, label_col=1, label=f'합계 ({len(pause_rows)}건)', value_cols=[4])
+    row += 1
+
+    row = _xlsx_add_stop_reason_chart(ws, row, NCOL, total_fault_min, pause_rows, reason_col=5, duration_col=4,
+                                    page_break_before=True)
 
     xlsx_finalize_report_sheet(ws, report_title=report_title, tab_color='1F4E79', freeze_row=3)
 
@@ -2507,12 +2574,13 @@ def production_section_export(lot_id, section):
 
     completed_fault_durations = [f['duration_minutes'] for f in stats['faults'] if not f['ongoing']]
     mttr = round(sum(completed_fault_durations) / len(completed_fault_durations), 1) if completed_fault_durations else None
+    total_stop_min = (stats['fault_seconds'] + stats['pause_downtime_seconds']) // 60
     row = xlsx_kpi_cards(ws, row, NCOL, [
         ('가동률', f'{rate}%',
          _XLSX_COLOR_SUCCESS if rate >= 95 else (_XLSX_COLOR_WARNING if rate >= 85 else _XLSX_COLOR_DANGER)),
-        ('고장건수', f"{stats['fault_count']}건", _XLSX_COLOR_DANGER if stats['fault_count'] else None),
-        ('정지시간', f"{stats['pause_downtime_seconds'] // 60}분",
-         _XLSX_COLOR_WARNING if stats['pause_downtime_seconds'] else None),
+        ('총 설비정지시간 (고장+정지)', f'{total_stop_min}분', _XLSX_COLOR_DANGER if total_stop_min else None),
+        ('└ 고장', f"{stats['fault_seconds'] // 60}분 ({stats['fault_count']}건)", None),
+        ('└ 정지 (점검·자재대기 등)', f"{stats['pause_downtime_seconds'] // 60}분", None),
         ('평균 조치시간(MTTR)', f'{mttr}분' if mttr is not None else '-', None),
     ])
 
@@ -2526,18 +2594,18 @@ def production_section_export(lot_id, section):
         percent_cols=[4], fill_colors=[fill], total_cols=NCOL)
     row += 1
 
-    row = xlsx_block_heading(ws, row, NCOL, f"고장 내역 ({len(stats['faults'])}건) — 발생원인 · 조치시간")
+    row = xlsx_block_heading(ws, row, NCOL, f"설비정지 내역 ① 고장 ({len(stats['faults'])}건) — 발생원인 · 조치시간", page_break_before=True)
     fault_rows = [[
         f['occurred_at'], '(미완료)' if f['ongoing'] else f['completed_at'],
         f['duration_minutes'], f['symptom'] or '', f['cause'] or '', f['worker'] or '',
     ] for f in stats['faults']]
-    hdr1, last1, row = xlsx_table_at(ws, row, ['발생시각', '완료시각', '조치시간(분)', '증상', '원인', '작업자'],
+    hdr1, last1, row = xlsx_table_at(ws, row, ['발생시각', '완료시각', '조치시간(분)', '증상', '원인', '조치자'],
                                       [18, 18, 12, 20, 25, 10], fault_rows, total_cols=NCOL)
     if fault_rows:
         _, row = xlsx_total_row(ws, hdr1 + 1, last1, label_col=1, label=f'합계 ({len(fault_rows)}건)', value_cols=[3])
     row += 1
 
-    row = xlsx_block_heading(ws, row, NCOL, f"가동정지 내역 ({len(stats['pauses'])}건) — 정지시간 · 정지사유")
+    row = xlsx_block_heading(ws, row, NCOL, f"설비정지 내역 ② 기타사유 - 점검·자재대기·교체 등 ({len(stats['pauses'])}건) — 정지시간 · 정지사유", page_break_before=True)
     pause_rows = [[
         p['paused_at'], '(정지중)' if p['ongoing'] else p['resumed_at'], p['duration_minutes'], p['reason'],
     ] for p in stats['pauses']]
@@ -2558,12 +2626,15 @@ def production_section_export(lot_id, section):
         daily.setdefault(d, {'fault': 0, 'downtime': 0})
         daily[d]['downtime'] += p['duration_minutes']
 
-    row = xlsx_block_heading(ws, row, NCOL, '일별 추이')
+    row = xlsx_block_heading(ws, row, NCOL, '일별 추이', page_break_before=True)
     daily_rows = [[d, daily[d]['fault'], daily[d]['downtime']] for d in sorted(daily.keys())]
     hdr3, last3, row = xlsx_table_at(ws, row, ['날짜', '고장(분)', '정지(분)'], [14, 12, 12], daily_rows, total_cols=NCOL)
     row = xlsx_bar_chart(ws, '일별 고장/정지 시간(분)', cat_col=1, data_cols=[2, 3], header_row=hdr3, last_data_row=last3,
                    start_col=1, anchor_row=row, x_title='날짜',
                    series_colors=[_XLSX_COLOR_DANGER, _XLSX_COLOR_WARNING], num_cols=NCOL) + 1
+
+    row = _xlsx_add_stop_reason_chart(ws, row, NCOL, stats['fault_seconds'] // 60, pause_rows, reason_col=4, duration_col=3,
+                                    page_break_before=True)
 
     xlsx_finalize_report_sheet(ws, report_title=report_title, tab_color='1F4E79', freeze_row=3)
 
@@ -3009,6 +3080,18 @@ def xlsx_title_block(ws, num_cols, title, subtitle=None):
     return row + 1
 
 
+def _xlsx_estimated_lines(text, width_units):
+    """텍스트가 지정한 엑셀 컬럼 폭(width_units) 안에서 줄바꿈되면 몇 줄이 필요한지 추정.
+    한글은 라틴 문자의 약 2배 폭을 차지하므로 가중치를 둬서 계산한다."""
+    if not text:
+        return 1
+    text = str(text)
+    korean = sum(1 for ch in text if '가' <= ch <= '힣' or 'ㄱ' <= ch <= 'ㆎ')
+    effective_len = korean * 2 + (len(text) - korean)
+    chars_per_line = max(int(width_units), 4)
+    return max(1, -(-effective_len // chars_per_line))  # 올림 나눗셈
+
+
 def xlsx_kpi_cards(ws, row, ncol, cards):
     """제목 배너 바로 아래에 큰 숫자 KPI 카드를 가로로 나열한다 (전체가동률/총고장건수/총정지시간/MTTR 등 한눈 요약).
     cards: [(label, value_str, color_hex_or_None), ...]. 반환값: 다음에 쓸 수 있는 빈 행 번호."""
@@ -3020,27 +3103,46 @@ def xlsx_kpi_cards(ws, row, ncol, cards):
         # 일어나서는 안 되는 상황이지만, 리포트 생성 자체가 죽는 것보단 초과분을 잘라내는 게 안전하다.
         cards = cards[:ncol]
         n = len(cards)
-    base_width = ncol // n
-    extra = ncol % n
+
+    # 라벨 길이에 비례해서 칸 폭을 배분한다. 예전처럼 균등분할하면 "평균 조치시간(MTTR)"처럼
+    # 긴 라벨이 짧은 라벨과 똑같은(혹은 더 좁은) 칸을 받아 글씨가 잘려나가는 문제가 있었다.
+    weights = [max(len(c[0]), 4) for c in cards]
+    total_w = sum(weights)
+    spans = [max(1, round(ncol * w / total_w)) for w in weights]
+    diff = ncol - sum(spans)
+    if diff != 0:
+        idx = spans.index(max(spans))
+        spans[idx] = max(1, spans[idx] + diff)
+
     label_row = row
     value_row = row + 1
     value_row_end = value_row + 1
     card_fill = PatternFill("solid", fgColor='EEF1F5')
+    label_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    value_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    max_label_lines = 1
+    max_value_lines = 1
     col = 1
     for i, (label, value, color) in enumerate(cards):
-        span = base_width + (1 if i < extra else 0)
+        span = spans[i]
         end_col = col + span - 1
+        max_label_lines = max(max_label_lines, _xlsx_estimated_lines(label, span * 11))
+        # 값이 "95.5%"처럼 짧으면 큰 글씨로, "150분 (12건)"처럼 길어지면 작은 글씨로 —
+        # 폰트를 안 줄이면 카드 폭을 넘어가서 옆 카드와 겹쳐 보인다.
+        value_len = len(str(value))
+        value_font_size = 20 if value_len <= 8 else (16 if value_len <= 13 else 13)
+        max_value_lines = max(max_value_lines, _xlsx_estimated_lines(value, span * (11 if value_font_size == 20 else 14)))
 
         ws.merge_cells(start_row=label_row, start_column=col, end_row=label_row, end_column=end_col)
         lc = ws.cell(row=label_row, column=col, value=label)
         lc.font = Font(size=9.5, color='6C757D', name=_XLSX_FONT_NAME)
-        lc.alignment = Alignment(horizontal='center', vertical='center')
+        lc.alignment = label_align
         lc.fill = card_fill
 
         ws.merge_cells(start_row=value_row, start_column=col, end_row=value_row_end, end_column=end_col)
         vc = ws.cell(row=value_row, column=col, value=value)
-        vc.font = Font(size=20, bold=True, color=(color or _XLSX_COLOR_NAVY), name=_XLSX_FONT_NAME)
-        vc.alignment = Alignment(horizontal='center', vertical='center')
+        vc.font = Font(size=value_font_size, bold=True, color=(color or _XLSX_COLOR_NAVY), name=_XLSX_FONT_NAME)
+        vc.alignment = value_align
 
         for rr in range(label_row, value_row_end + 1):
             for cc in range(col, end_col + 1):
@@ -3049,20 +3151,39 @@ def xlsx_kpi_cards(ws, row, ncol, cards):
                 cell.fill = card_fill
         col = end_col + 1
 
-    ws.row_dimensions[label_row].height = 16
-    ws.row_dimensions[value_row].height = 26
+    ws.row_dimensions[label_row].height = max(16, 12 * max_label_lines + 4)
+    value_area_height = max(26, 15 * max_value_lines + 6)
+    ws.row_dimensions[value_row].height = value_area_height
     ws.row_dimensions[value_row_end].height = 10
     return value_row_end + 2
 
 
-def xlsx_block_heading(ws, row, num_cols, text):
-    """표 블록 사이에 넣는 '▌ 섹션명' 배너. 다음 행(표 헤더가 들어갈 행) 번호를 반환."""
+def xlsx_block_heading(ws, row, num_cols, text, page_break_before=False):
+    """표 블록 사이에 넣는 '▌ 섹션명' 배너. 다음 행(표 헤더가 들어갈 행) 번호를 반환.
+    page_break_before=True면 이 배너가 새 인쇄 페이지 맨 위에서 시작하도록 그 앞에 페이지 나누기를 넣는다
+    (표가 인쇄 페이지 중간에서 두 동강 나는 걸 막기 위함 — 리포트를 실제로 인쇄/PDF변환할 때 필요)."""
+    if page_break_before and row > 1:
+        ws.row_breaks.append(Break(id=row - 1))
     last_col_letter = openpyxl.utils.get_column_letter(max(num_cols, 1))
     ws.merge_cells(f'A{row}:{last_col_letter}{row}')
     c = ws.cell(row=row, column=1, value=f'▌ {text}')
     c.font = Font(bold=True, size=12, color=_XLSX_COLOR_NAVY, name=_XLSX_FONT_NAME)
     c.alignment = Alignment(horizontal='left', vertical='center')
     ws.row_dimensions[row].height = 22
+    return row + 1
+
+
+def xlsx_subheading(ws, row, num_cols, text):
+    """큰 '▌' 블록 안에서 한 단계 더 세분화할 때 쓰는 가벼운 소제목 (예: 섹션별 상세를 섹션 단위로 묶을 때).
+    xlsx_block_heading과 달리 페이지를 나누지 않고 색도 옅게 해서, 같은 블록 안의 하위 그룹임을 표시한다."""
+    last_col_letter = openpyxl.utils.get_column_letter(max(num_cols, 1))
+    ws.merge_cells(f'A{row}:{last_col_letter}{row}')
+    c = ws.cell(row=row, column=1, value=f'· {text}')
+    c.font = Font(bold=True, size=10.5, italic=True, color='495057', name=_XLSX_FONT_NAME)
+    c.fill = PatternFill("solid", fgColor='F5F6F8')
+    c.alignment = Alignment(horizontal='left', vertical='center', indent=1)
+    c.border = _XLSX_BORDER
+    ws.row_dimensions[row].height = 18
     return row + 1
 
 
@@ -3095,19 +3216,23 @@ def xlsx_table_at(ws, header_row, headers, widths, rows, percent_cols=None, fill
     for i, values in enumerate(rows):
         fill = fill_colors[i] if fill_colors else None
         xlsx_row(ws, r, values, fill_color=fill, percent_cols=percent_cols,
-                 merge_last_to=(last_col if merge_last else None))
+                 merge_last_to=(last_col if merge_last else None), col_widths=widths)
         r += 1
     last_data_row = r - 1
     return header_row, last_data_row, r
 
 
-def xlsx_row(ws, row_i, values, fill_color=None, percent_cols=None, merge_last_to=None):
+def xlsx_row(ws, row_i, values, fill_color=None, percent_cols=None, merge_last_to=None, col_widths=None):
     """한 행을 공통 스타일(중앙정렬+테두리, 선택적 배경색)로 채워 넣는다.
     percent_cols: '95.5' 같은 숫자를 셀에서 '95.5%'로 보이게 할 1-indexed 컬럼들 (값 자체는 그대로 95.5 유지).
-    merge_last_to: 주어지면 마지막 값 컬럼을 그 컬럼까지 병합 (표들 간 우측 폭을 맞추기 위함)."""
+    merge_last_to: 주어지면 마지막 값 컬럼을 그 컬럼까지 병합 (표들 간 우측 폭을 맞추기 위함).
+    col_widths: 각 컬럼의 엑셀 폭 목록을 주면, 증상/원인처럼 긴 텍스트가 줄바꿈되고도 잘리지 않도록
+    실제로 몇 줄이 필요한지 추정해서 행 높이를 자동으로 늘린다 (기존엔 높이가 18로 고정돼 있어
+    wrap_text를 켜놔도 셀 안에서 시각적으로 잘려 보였다)."""
     row_fill = PatternFill("solid", fgColor=fill_color) if fill_color else None
     percent_cols = percent_cols or ()
     n = len(values)
+    max_lines = 1
     for ci, val in enumerate(values, 1):
         span_end = merge_last_to if (merge_last_to and ci == n and merge_last_to > n) else ci
         if span_end > ci:
@@ -3122,7 +3247,10 @@ def xlsx_row(ws, row_i, values, fill_color=None, percent_cols=None, merge_last_t
         cell = ws.cell(row=row_i, column=ci, value=val)
         if ci in percent_cols and isinstance(val, (int, float)):
             cell.number_format = _XLSX_PERCENT_FMT
-    ws.row_dimensions[row_i].height = 18
+        if col_widths and ci - 1 < len(col_widths) and isinstance(val, str):
+            span_width = sum(col_widths[ci - 1:span_end]) if span_end > ci else col_widths[ci - 1]
+            max_lines = max(max_lines, _xlsx_estimated_lines(val, span_width))
+    ws.row_dimensions[row_i].height = max(18, 14 * max_lines + 4)
 
 def xlsx_response(wb, filename_prefix):
     buf = io.BytesIO()
@@ -3247,6 +3375,121 @@ def xlsx_bar_chart(ws, title, cat_col, data_cols, header_row, last_data_row, sta
     chart.anchor = TwoCellAnchor(editAs='oneCell', _from=marker_from, to=marker_to)
     ws.add_chart(chart)
     return end_row
+
+
+_XLSX_PIE_COLORS = ['C62828', 'E65100', '1565C0', '6A1B9A', '00838F', '6C757D', '2E7D32']
+
+
+def xlsx_hbar_chart(ws, title, cat_col, data_col, header_row, last_data_row, start_col, anchor_row=None,
+                    num_cols=8, min_rows=15, point_colors=None, y_percent=True):
+    """가로 막대그래프. 항목마다 독립된 한 줄(가로 막대)을 차지하므로, 원형그래프와 달리 항목
+    개수나 비중 크기와 무관하게 라벨끼리 절대 겹치지 않는다. 항목별 색상(point_colors) + 막대
+    끝의 값 라벨(텍스트) 두 가지로 항목을 동시에 구분한다."""
+    if last_data_row < header_row + 1:
+        return anchor_row or header_row
+    anchor_row = anchor_row or header_row
+    chart = BarChart()
+    chart.type = "bar"  # 가로 막대: 항목명이 세로로 나란히 나열됨
+    chart.grouping = "clustered"
+    chart.gapWidth = 50
+    chart.style = None
+    chart.title = title
+    _xlsx_style_chart_title(chart)
+    chart.y_axis.title = None
+    chart.x_axis.title = None
+    # 주의: openpyxl은 막대 방향(bar/col)과 무관하게 x_axis=항목축, y_axis=값축으로 고정한다
+    # (barDir="bar"여도 축 객체의 의미는 바뀌지 않고 화면상 방향만 바뀐다).
+    chart.y_axis.majorGridlines.spPr = GraphicalProperties(ln=LineProperties(solidFill=_XLSX_COLOR_GRIDLINE))
+    chart.x_axis.delete = False
+    chart.y_axis.delete = False
+    if y_percent:
+        chart.y_axis.numFmt = '0"%"'
+        chart.y_axis.scaling.min = 0
+        chart.y_axis.scaling.max = 100
+    # 표와 같은 순서(비중이 큰 항목이 위쪽)로 보이도록 항목축 방향을 반전
+    chart.x_axis.scaling.orientation = "maxMin"
+    # 왼쪽에 긴 한글 항목명이 들어갈 여백을 넉넉히 확보 (제목-플롯 겹침 방지는 y로 확보)
+    chart.layout = Layout(
+        manualLayout=ManualLayout(x=0.28, y=0.16, h=0.78, w=0.68, xMode="edge", yMode="edge")
+    )
+    chart.legend = None
+
+    cats = Reference(ws, min_col=cat_col, min_row=header_row + 1, max_row=last_data_row)
+    data = Reference(ws, min_col=data_col, min_row=header_row, max_row=last_data_row)
+    chart.add_data(data, titles_from_data=True)
+    chart.set_categories(cats)
+
+    series = chart.series[0]
+    if point_colors:
+        dpts = []
+        for idx in range(last_data_row - header_row):
+            color = point_colors[idx % len(point_colors)]
+            dpt = DataPoint(idx=idx)
+            dpt.graphicalProperties = GraphicalProperties(solidFill=color)
+            dpt.graphicalProperties.ln = LineProperties(noFill=True)
+            dpts.append(dpt)
+        series.data_points = dpts
+
+    dl = DataLabelList()
+    dl.showVal = True
+    dl.showSerName = False
+    dl.showCatName = False
+    dl.showLegendKey = False
+    dl.showPercent = False
+    dl.showBubbleSize = False
+    dl.numFmt = '0.0"%"' if y_percent else '0'
+    dl.dLblPos = 'outEnd'
+    dl.txPr = RichText(p=[Paragraph(
+        pPr=ParagraphProperties(defRPr=CharacterProperties(sz=1000, b=True)),
+        endParaRPr=CharacterProperties(sz=1000, b=True)
+    )])
+    chart.dataLabels = dl
+
+    n = last_data_row - header_row
+    chart_rows = max(n * 2 + 3, min_rows)  # 항목마다 막대가 뭉개지지 않도록 항목당 최소 2행 확보
+    end_row = anchor_row + chart_rows - 1
+    end_col = start_col + num_cols - 1
+    marker_from = AnchorMarker(col=start_col - 1, colOff=0, row=anchor_row - 1, rowOff=0)
+    marker_to = AnchorMarker(col=end_col, colOff=0, row=end_row, rowOff=0)
+    chart.anchor = TwoCellAnchor(editAs='oneCell', _from=marker_from, to=marker_to)
+    ws.add_chart(chart)
+    return end_row
+
+
+def _xlsx_add_stop_reason_chart(ws, row, ncol, fault_total_min, pause_rows, reason_col, duration_col,
+                                page_break_before=False):
+    """고장시간 + 정지사유(설비점검/자재대기/교체/기타)별 시간을 집계해서 '정지요인별 분석' 표와
+    가로 막대그래프를 그려 넣는다. 설비고장도 결국 정지요인 중 하나이므로 같은 그래프 안에 포함시킨다.
+    (이전엔 원형그래프였으나, 정지사유가 6개 이상+소항목 다수일 때 조각 라벨이 서로 겹치는 문제가
+    반복적으로 재현되어 가로 막대그래프로 교체 — 항목마다 자기 줄을 가져 구조적으로 겹칠 수 없다.)
+    정지시간이 전혀 없으면 아무것도 그리지 않고 그대로 반환."""
+    reason_minutes = {}
+    for r in pause_rows:
+        reason = r[reason_col - 1] or '기타'
+        dur = r[duration_col - 1]
+        if isinstance(dur, (int, float)):
+            reason_minutes[reason] = reason_minutes.get(reason, 0) + dur
+    if fault_total_min:
+        reason_minutes['설비고장'] = fault_total_min
+
+    total = sum(reason_minutes.values())
+    if total <= 0:
+        return row
+
+    # 비중이 큰 순서로 정렬해서 어떤 원인이 가장 큰 비중을 차지하는지 표·그래프에서 바로 보이게
+    # 한다 (설비 정지원인 분석에서 흔히 쓰는 파레토식 정렬). 막대그래프는 항목이 몇 개든 각자
+    # 독립된 줄을 차지하므로, 원형그래프와 달리 항목 수를 줄일 필요가 없다 — 전부 그대로 보여준다.
+    ordered_names = sorted(reason_minutes.keys(), key=lambda n: reason_minutes[n], reverse=True)
+    table_rows = [[n, reason_minutes[n], round(reason_minutes[n] / total * 100, 1)] for n in ordered_names]
+
+    row = xlsx_block_heading(ws, row, ncol, f'정지요인별 분석 (총 {total}분)', page_break_before=page_break_before)
+    hdr, last, row = xlsx_table_at(ws, row, ['정지요인', '시간(분)', '비율(%)'], [16, 12, 12], table_rows,
+                                    percent_cols=[3], total_cols=ncol)
+    point_colors = [_XLSX_PIE_COLORS[i % len(_XLSX_PIE_COLORS)] for i in range(len(ordered_names))]
+    row = xlsx_hbar_chart(ws, '정지요인별 구성비 (비중이 큰 순)', cat_col=1, data_col=3, header_row=hdr, last_data_row=last,
+                          start_col=1, anchor_row=row, num_cols=ncol,
+                          min_rows=max(15, len(ordered_names) * 2 + 3), point_colors=point_colors) + 1
+    return row
 
 
 def xlsx_finalize_report_sheet(ws, report_title=None, tab_color=None, freeze_row=None, wide=True):

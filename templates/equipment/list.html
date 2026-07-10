@@ -72,6 +72,7 @@
                 <th>설비명</th>
                 <th class="d-none d-md-table-cell">섹션</th>
                 <th class="d-none d-md-table-cell">위치</th>
+                <th class="d-none d-lg-table-cell">QR 최종 리셋</th>
                 <th class="text-center">QR</th>
                 <th class="text-center">관리</th>
               </tr>
@@ -90,6 +91,7 @@
                   <span class="badge bg-section">{{ eq.section }}</span>
                 </td>
                 <td class="d-none d-md-table-cell text-muted">{{ eq.location or '-' }}</td>
+                <td class="d-none d-lg-table-cell text-muted" style="font-size:.85rem">{{ eq.qr_reset_at or '-' }}</td>
                 <td class="text-center">
                   <a href="{{ url_for('qr_print', eq_id=eq.id) }}"
                      class="btn btn-outline-dark btn-xs" title="QR 출력">

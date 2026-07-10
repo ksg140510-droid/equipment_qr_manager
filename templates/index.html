@@ -384,7 +384,7 @@
         <ul class="list-group list-group-flush" style="max-height:220px;overflow-y:auto;">
           {% for w in top_worker %}
           <li class="list-group-item d-flex justify-content-between align-items-center">
-            <span class="text-truncate me-2">{{ w.worker }}</span>
+            <span class="text-truncate me-2 min-w-0">{{ w.worker }}</span>
             <span class="badge" style="background:rgba(21,101,192,.12);color:var(--mes-blue);border:1px solid rgba(21,101,192,.2)">{{ w.cnt }}</span>
           </li>
           {% endfor %}

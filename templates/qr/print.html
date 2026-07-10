@@ -50,6 +50,10 @@
           </div>
         </div>
       </div>
+      <div class="d-print-none text-center" style="font-size:0.8rem;color:var(--mes-muted);padding:0 1.1rem .5rem">
+        <i class="bi bi-clock-history me-1"></i>QR 최종 리셋: {{ eq.qr_reset_at or '-' }}
+        {% if eq.qr_reset_at %}<br><span class="text-warning">※ 재생성 후에는 기존에 인쇄된 QR 스티커를 새로 교체해주세요.</span>{% endif %}
+      </div>
       <div class="card-footer" style="background:#fff !important;padding:.9rem 1.1rem !important;">
         <div class="d-grid gap-2">
           <button onclick="window.print()" class="btn btn-dark">
