@@ -56,6 +56,22 @@
         </form>
         {% endfor %}
       </div>
+      {% if session.get('edit_authorized') %}
+      <form method="post" action="{{ url_for('kakao_notify_settings') }}" class="mt-2 pt-2 border-top">
+        <div class="text-muted small mb-1">받을 알림 유형 선택</div>
+        <div class="d-flex flex-wrap gap-3 align-items-center">
+          {% for key, label in notify_types.items() %}
+          <div class="form-check form-check-inline m-0">
+            <input class="form-check-input" type="checkbox" name="notify_{{ key }}" id="notify_{{ key }}"
+                   {% if notify_settings.get(key, True) %}checked{% endif %}>
+            <label class="form-check-label small" for="notify_{{ key }}">{{ label }}</label>
+          </div>
+          {% endfor %}
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn-sm btn-outline-primary">저장</button>
+        </div>
+      </form>
+      {% endif %}
     </div>
     {% else %}
     <div class="alert alert-warning d-flex align-items-center justify-content-between mb-0 flex-wrap gap-2">
@@ -74,6 +90,59 @@
       {% endif %}
     </div>
     {% endif %}
+  </div>
+
+  <!-- 최근 활동 통합 피드 -->
+  <div class="col-12 col-lg-6">
+    <div class="card h-100">
+      <div class="card-header d-flex align-items-center justify-content-between">
+        <span><i class="bi bi-clock-history" style="color:var(--mes-danger)"></i> 최근 고장</span>
+        <a href="{{ url_for('fault_list') }}" class="small text-decoration-none">전체보기</a>
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-hover mb-0">
+          <tbody>
+            {% for f in recent_faults %}
+            <tr onclick="location.href='{{ url_for('fault_detail', fault_id=f.id) }}'" style="cursor:pointer">
+              <td class="text-muted small" style="white-space:nowrap">{{ f.occurred_at[5:16] if f.occurred_at else '-' }}</td>
+              <td class="fw-bold small">{{ f.eq_number }}</td>
+              <td class="small text-truncate" style="max-width:160px">{{ f.symptom or '-' }}</td>
+              <td class="text-end">
+                <span class="badge {% if f.status == '완료' %}bg-success{% elif f.status == '진행중' %}bg-warning text-dark{% else %}bg-secondary{% endif %}" style="font-size:.68rem">
+                  {{ f.status or '미조치' }}
+                </span>
+              </td>
+            </tr>
+            {% else %}
+            {{ empty_row(4, '등록된 고장이 없습니다.') }}
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="col-12 col-lg-6">
+    <div class="card h-100">
+      <div class="card-header d-flex align-items-center justify-content-between">
+        <span><i class="bi bi-boxes" style="color:var(--mes-blue)"></i> 최근 생산 활동</span>
+        <a href="{{ url_for('production_list') }}" class="small text-decoration-none">전체보기</a>
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-hover mb-0">
+          <tbody>
+            {% for p in recent_production %}
+            <tr onclick="location.href='{{ url_for('production_detail', lot_id=p.target_id) }}'" style="cursor:pointer">
+              <td class="text-muted small" style="white-space:nowrap">{{ p.created_at[5:16] if p.created_at else '-' }}</td>
+              <td class="small">{{ p.action }}</td>
+              <td class="small text-truncate" style="max-width:180px">{{ p.detail or '-' }}</td>
+            </tr>
+            {% else %}
+            {{ empty_row(3, '최근 생산 활동이 없습니다.') }}
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 
   <!-- 요약 KPI 카드 (클릭 시 해당 이력 조회) -->

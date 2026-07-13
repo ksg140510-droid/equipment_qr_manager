@@ -129,6 +129,12 @@
                   <button type="submit" class="btn btn-danger w-100"><i class="bi bi-stop-circle"></i> 가동 종료</button>
                 </form>
                 <a href="{{ url_for('production_section_detail', lot_id=lot.id, section=s.section) }}" class="btn btn-outline-primary">상세 보기</a>
+                {% if session.get('edit_authorized') %}
+                <button type="button" class="btn btn-outline-secondary btn-sm"
+                        onclick="openEditTimes('{{ url_for('production_section_edit_times', lot_id=lot.id, section=s.section) }}', '{{ s.section }}', '{{ (s.started_at[:16] | replace(' ', 'T')) if s.started_at else '' }}', '', false)">
+                  <i class="bi bi-clock-history"></i> 시작시각 수정
+                </button>
+                {% endif %}
               {% elif s.status == '일시정지' %}
                 <form method="post" action="{{ url_for('production_section_resume', lot_id=lot.id, section=s.section) }}">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -140,8 +146,20 @@
                   <button type="submit" class="btn btn-danger w-100"><i class="bi bi-stop-circle"></i> 가동 종료</button>
                 </form>
                 <a href="{{ url_for('production_section_detail', lot_id=lot.id, section=s.section) }}" class="btn btn-outline-primary">상세 보기</a>
+                {% if session.get('edit_authorized') %}
+                <button type="button" class="btn btn-outline-secondary btn-sm"
+                        onclick="openEditTimes('{{ url_for('production_section_edit_times', lot_id=lot.id, section=s.section) }}', '{{ s.section }}', '{{ (s.started_at[:16] | replace(' ', 'T')) if s.started_at else '' }}', '', false)">
+                  <i class="bi bi-clock-history"></i> 시작시각 수정
+                </button>
+                {% endif %}
               {% else %}
                 <a href="{{ url_for('production_section_detail', lot_id=lot.id, section=s.section) }}" class="btn btn-outline-primary">상세 보기</a>
+                {% if session.get('edit_authorized') and s.status == '완료' %}
+                <button type="button" class="btn btn-outline-secondary btn-sm"
+                        onclick="openEditTimes('{{ url_for('production_section_edit_times', lot_id=lot.id, section=s.section) }}', '{{ s.section }}', '{{ (s.started_at[:16] | replace(' ', 'T')) if s.started_at else '' }}', '{{ (s.ended_at[:16] | replace(' ', 'T')) if s.ended_at else '' }}', true)">
+                  <i class="bi bi-clock-history"></i> 시작/종료시각 수정
+                </button>
+                {% endif %}
               {% endif %}
             </div>
           </div>
@@ -185,6 +203,40 @@
     </div>
   </div>
 </div>
+
+<!-- 시각 수정 모달 -->
+<div class="modal fade" id="editTimesModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered" style="max-width:380px">
+    <div class="modal-content" style="border-radius:14px;overflow:hidden;border:none">
+      <div class="modal-header" style="background:var(--mes-navy);color:#fff;border:none;padding:1rem 1.3rem">
+        <h6 class="modal-title mb-0"><i class="bi bi-clock-history me-2" style="color:var(--mes-cyan)"></i>가동 시각 수정</h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-4">
+        <p class="text-muted small mb-3" id="editTimesTarget"></p>
+        <form method="post" id="editTimesForm">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="mb-3">
+            <label class="form-label small text-muted">시작 시각</label>
+            <input type="datetime-local" name="started_at" id="editTimesStarted" class="form-control" required>
+          </div>
+          <div class="mb-3" id="editTimesEndedWrap" style="display:none">
+            <label class="form-label small text-muted">종료 시각</label>
+            <input type="datetime-local" name="ended_at" id="editTimesEnded" class="form-control">
+          </div>
+          <div class="text-muted small mb-3">
+            <i class="bi bi-info-circle me-1"></i>종료된 구간의 시각을 수정하면 가동률이 새 시각 기준으로 다시 계산됩니다.
+          </div>
+          <div class="d-grid">
+            <button type="submit" class="btn btn-primary" style="min-height:48px;font-weight:700">
+              <i class="bi bi-check-circle-fill me-1"></i>저장
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -193,6 +245,23 @@ function openPauseReason(actionUrl, targetLabel) {
   document.getElementById('pauseReasonForm').action = actionUrl;
   document.getElementById('pauseReasonTarget').textContent = "'" + targetLabel + "' 가동을 정지합니다. 사유를 선택해 주세요.";
   new bootstrap.Modal(document.getElementById('pauseReasonModal')).show();
+}
+function openEditTimes(actionUrl, targetLabel, startedAt, endedAt, showEnded) {
+  document.getElementById('editTimesForm').action = actionUrl;
+  document.getElementById('editTimesTarget').textContent = "'" + targetLabel + "'의 가동 시각을 수정합니다.";
+  document.getElementById('editTimesStarted').value = startedAt;
+  const endedWrap = document.getElementById('editTimesEndedWrap');
+  const endedInput = document.getElementById('editTimesEnded');
+  if (showEnded) {
+    endedWrap.style.display = 'block';
+    endedInput.value = endedAt;
+    endedInput.required = true;
+  } else {
+    endedWrap.style.display = 'none';
+    endedInput.value = '';
+    endedInput.required = false;
+  }
+  new bootstrap.Modal(document.getElementById('editTimesModal')).show();
 }
 document.querySelectorAll('.pause-reason-radio').forEach(function(radio) {
   radio.addEventListener('change', function() {

@@ -153,6 +153,8 @@ def init_db():
     conn.commit()
 
     # 휴식시간 기본 항목 시딩 (최초 1회, 실제 값은 설정 화면에서 수정)
+    # 잔업은 다른 3개(오전휴식/점심시간/오후휴식)와 달리 근무시간이므로 가동대상시간에서
+    # 제외되지 않는다 (_excluded_intervals에서 '잔업'만 제외 대상에서 뺌).
     try:
         c.execute("""
             INSERT OR IGNORE INTO break_schedules (name, start_time, end_time) VALUES
@@ -160,6 +162,16 @@ def init_db():
             ('점심시간', '12:00', '13:00'),
             ('오후휴식', '15:00', '15:10'),
             ('잔업', '18:00', '18:10')
+        """)
+        conn.commit()
+    except Exception:
+        pass
+
+    # 잔업이 있는 날은 오후휴식이 한 번 더(잔업 중 휴식) 있으므로 항목 추가
+    try:
+        c.execute("""
+            INSERT OR IGNORE INTO break_schedules (name, start_time, end_time) VALUES
+            ('오후휴식2', '19:00', '19:10')
         """)
         conn.commit()
     except Exception:

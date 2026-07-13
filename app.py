@@ -244,6 +244,25 @@ KAKAO_TOKEN_URL     = 'https://kauth.kakao.com/oauth/token'
 KAKAO_SEND_URL      = 'https://kapi.kakao.com/v2/api/talk/memo/default/send'
 KAKAO_USER_ME_URL   = 'https://kapi.kakao.com/v2/user/me'
 
+# ─── 알림 유형별 on/off 설정 (사람마다 원하는 알림만 받고 싶을 수 있어서 분리) ──
+NOTIFY_SETTINGS_PATH = os.path.join(BASE_DIR, 'notify_settings.json')
+NOTIFY_TYPES = {'fault': '고장 발생 알림', 'section_end': '섹션 가동종료 알림'}
+
+def _load_notify_settings():
+    try:
+        with open(NOTIFY_SETTINGS_PATH, encoding='utf-8') as f:
+            cfg = json.load(f)
+    except Exception:
+        cfg = {}
+    return {k: cfg.get(k, True) for k in NOTIFY_TYPES}  # 기본값: 전부 켜짐(기존 동작 유지)
+
+def _save_notify_settings(cfg):
+    with open(NOTIFY_SETTINGS_PATH, 'w', encoding='utf-8') as f:
+        json.dump(cfg, f, ensure_ascii=False)
+
+def _notify_type_enabled(key):
+    return _load_notify_settings().get(key, True)
+
 try:
     import win32crypt
     _DPAPI_LOCAL_MACHINE = 4  # CRYPTPROTECT_LOCAL_MACHINE - 이 기기 밖으로 파일이 유출돼도 복호화 불가
@@ -470,7 +489,7 @@ GRADE_NOTIFY_LABEL = {
 }
 
 def notify_fault_by_grade(grade, fault_id, eq_number, eq_name, symptom, status=None, worker=None, action_detail=None):
-    if grade not in GRADE_NOTIFY_LABEL or not _kakao_connected():
+    if grade not in GRADE_NOTIFY_LABEL or not _kakao_connected() or not _notify_type_enabled('fault'):
         return
     emoji, label = GRADE_NOTIFY_LABEL[grade]
     ip = get_local_ip()
@@ -486,6 +505,35 @@ def notify_fault_by_grade(grade, fault_id, eq_number, eq_name, symptom, status=N
         _kakao_send_to_all(text, link_url)
     except Exception:
         logging.exception('notify_fault_by_grade failed')
+
+
+def notify_section_end(lot, section, stats):
+    if not _kakao_connected() or not _notify_type_enabled('section_end'):
+        return
+    rate = stats['uptime_rate']
+    if rate >= 95:
+        emoji, label = '✅', '정상'
+    elif rate >= 85:
+        emoji, label = '⚠️', '주의'
+    else:
+        emoji, label = '🔴', '저조'
+    avail_m = stats['available_seconds'] // 60
+    fault_m = stats['fault_seconds'] // 60
+    pause_m = stats['pause_downtime_seconds'] // 60
+    down_m = fault_m + pause_m
+    ip = get_local_ip()
+    link_url = f'http://{ip}:5001/production/{lot["id"]}'
+    text = (f'{emoji} 설비가동 섹션 종료 ({label})\n'
+            f'LOT: {lot["model_name"]} / {lot["lot_number"]}\n'
+            f'섹션: {section}\n'
+            f'가동률: {rate}%\n'
+            f'가동대상시간: {avail_m}분\n'
+            f'총 설비정지: {down_m}분 (고장 {fault_m}분 {stats["fault_count"]}건 · 정지 {pause_m}분 {stats["pause_count"]}건)\n'
+            f'상세보기에서 확인해주세요.')
+    try:
+        _kakao_send_to_all(text, link_url)
+    except Exception:
+        logging.exception('notify_section_end failed')
 
 
 def allowed_file(filename):
@@ -579,8 +627,12 @@ def _get_section_pauses(db, lot_section_id, win_start, win_end):
 
 def _excluded_intervals(db, lot_section_id, win_start, win_end):
     """가동대상시간(분모)에서 빠지는 구간(반복되는 휴식시간 + '퇴근' 사유의 가동정지)을
-    시간순으로 병합해서 반환. 겹치는 구간은 하나로 합쳐서 이중으로 차감되지 않도록 한다."""
-    schedules = db.execute("SELECT name, start_time, end_time FROM break_schedules").fetchall()
+    시간순으로 병합해서 반환. 겹치는 구간은 하나로 합쳐서 이중으로 차감되지 않도록 한다.
+    '잔업'은 휴식시간이 아니라 근무시간이므로 여기서 제외 대상에서 뺀다 — 잔업 중 실제로
+    가동한 시간은 그대로 가동대상시간에 포함되어 가동률 계산에 반영된다."""
+    schedules = db.execute(
+        "SELECT name, start_time, end_time FROM break_schedules WHERE name != '잔업'"
+    ).fetchall()
     raw = []
     day = win_start.date()
     end_day = win_end.date()
@@ -892,6 +944,18 @@ def generate_qr(eq_id, host_url=None):
 def index():
     db = get_db()
 
+    recent_faults = db.execute("""
+        SELECT id, eq_number, eq_name, occurred_at, symptom, worker, grade, status
+        FROM fault_history ORDER BY occurred_at DESC LIMIT 8
+    """).fetchall()
+    recent_production = db.execute("""
+        SELECT actor, action, detail, created_at, target_id
+        FROM audit_log
+        WHERE target_type='production_lot' AND action IN
+            ('LOT 등록','섹션 가동시작','섹션 가동정지','섹션 가동재개','섹션 가동종료','LOT 종료')
+        ORDER BY created_at DESC LIMIT 8
+    """).fetchall()
+
     total     = db.execute("SELECT COUNT(*) FROM fault_history").fetchone()[0]
     this_week = db.execute("""
         SELECT COUNT(*) FROM fault_history
@@ -1024,7 +1088,9 @@ def index():
         parts_chart=parts_chart,
         week_start=week_start, month_start=month_start,
         section_status=section_status, pause_reasons=PAUSE_REASONS,
-        kakao_connected=_kakao_connected(), kakao_accounts=_kakao_load().get('accounts', []))
+        kakao_connected=_kakao_connected(), kakao_accounts=_kakao_load().get('accounts', []),
+        notify_types=NOTIFY_TYPES, notify_settings=_load_notify_settings(),
+        recent_faults=recent_faults, recent_production=recent_production)
 
 
 @app.route('/dashboard/sections.json')
@@ -2497,8 +2563,73 @@ def production_section_end(lot_id, section):
           stats['pause_downtime_seconds'], stats['uptime_rate'], ls['id']))
     db.commit()
     log_action('섹션 가동종료', 'production_lot', lot_id, f"{section} / 가동률 {stats['uptime_rate']}%")
+    lot = db.execute("SELECT * FROM production_lots WHERE id=?", (lot_id,)).fetchone()
     db.close()
+    if lot:
+        notify_section_end(lot, section, stats)
     flash(f"{section} 가동을 종료했습니다. (가동률 {stats['uptime_rate']}%)", 'success')
+    return redirect(url_for('production_detail', lot_id=lot_id))
+
+
+@app.route('/production/<int:lot_id>/section/<section>/edit_times', methods=['POST'])
+def production_section_edit_times(lot_id, section):
+    """가동 시작/종료 시각을 실제 시각에 맞게 수정. 이미 종료된 구간이면 수정된 시각 기준으로
+    가동대상시간/고장시간/가동률을 다시 계산해서 저장한다 (진행중인 구간은 매번 실시간 계산되므로
+    시작시각만 바꿔도 다음 조회 때 자동 반영됨)."""
+    if not session.get('edit_authorized'):
+        flash('시각 수정은 로그인 후 이용해 주세요.', 'danger')
+        return redirect(url_for('login', next=url_for('production_detail', lot_id=lot_id)))
+
+    db = get_db()
+    ls = db.execute(
+        "SELECT * FROM production_lot_sections WHERE lot_id=? AND section=? ORDER BY id DESC LIMIT 1",
+        (lot_id, section)
+    ).fetchone()
+    if not ls:
+        db.close()
+        flash('가동 구간을 찾을 수 없습니다.', 'danger')
+        return redirect(url_for('production_detail', lot_id=lot_id))
+
+    started_at = parse_optional_datetime(request.form.get('started_at', ''))
+    if not started_at:
+        db.close()
+        flash('시작 시각을 올바르게 입력해 주세요.', 'danger')
+        return redirect(url_for('production_detail', lot_id=lot_id))
+
+    ended_at = ls['ended_at']
+    if ls['status'] == '완료':
+        ended_at = parse_optional_datetime(request.form.get('ended_at', ''))
+        if not ended_at:
+            db.close()
+            flash('종료 시각을 올바르게 입력해 주세요.', 'danger')
+            return redirect(url_for('production_detail', lot_id=lot_id))
+        if ended_at <= started_at:
+            db.close()
+            flash('종료 시각은 시작 시각보다 늦어야 합니다.', 'danger')
+            return redirect(url_for('production_detail', lot_id=lot_id))
+
+    db.execute("UPDATE production_lot_sections SET started_at=?, ended_at=? WHERE id=?",
+               (started_at, ended_at, ls['id']))
+
+    if ls['status'] == '완료':
+        ls_dict = dict(ls)
+        ls_dict['started_at'] = started_at
+        ls_dict['ended_at'] = ended_at
+        stats = compute_section_stats(db, ls['id'], lot_section_row=ls_dict)
+        db.execute("""
+            UPDATE production_lot_sections
+            SET available_seconds=?, fault_seconds=?, fault_count=?, pause_downtime_seconds=?, uptime_rate=?
+            WHERE id=?
+        """, (stats['available_seconds'], stats['fault_seconds'], stats['fault_count'],
+              stats['pause_downtime_seconds'], stats['uptime_rate'], ls['id']))
+        detail = f"{section} 시작:{started_at} 종료:{ended_at} / 가동률 재계산 {stats['uptime_rate']}%"
+    else:
+        detail = f"{section} 시작:{started_at}"
+
+    db.commit()
+    log_action('섹션 시각 수정', 'production_lot', lot_id, detail)
+    db.close()
+    flash(f'{section}의 가동 시각을 수정했습니다.', 'success')
     return redirect(url_for('production_detail', lot_id=lot_id))
 
 
@@ -3658,12 +3789,44 @@ def do_backup():
 AUTO_BACKUP_DIR = os.path.join(BASE_DIR, 'db_backups')
 AUTO_BACKUP_RETENTION_DAYS = 14
 
+def _verify_backup_integrity(path):
+    """백업 파일이 실제로 열리고 손상되지 않았는지 확인 (PRAGMA integrity_check).
+    복사만 하고 한 번도 검증 안 하면, 정작 복원이 필요한 시점에야 손상을 발견하게 된다."""
+    if not os.path.exists(path):
+        # sqlite3.connect()는 파일이 없으면 자동으로 빈 DB를 새로 만들어버려서,
+        # 이 체크 없이는 "백업이 아예 안 됨"이 "정상"으로 오판된다.
+        return False
+    try:
+        conn = sqlite3.connect(path)
+        try:
+            result = conn.execute('PRAGMA integrity_check').fetchone()
+            return bool(result and result[0] == 'ok')
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
 def _auto_backup_db():
     os.makedirs(AUTO_BACKUP_DIR, exist_ok=True)
     ts = datetime.now().strftime('%Y%m%d_%H%M%S')
     src = os.path.join(BASE_DIR, 'equipment_qr.db')
     dst = os.path.join(AUTO_BACKUP_DIR, f'equipment_qr_{ts}.db')
     shutil.copy2(src, dst)
+
+    if _verify_backup_integrity(dst):
+        logging.info('자동 DB 백업 완료 및 정합성 확인: %s', dst)
+    else:
+        logging.error('자동 DB 백업 정합성 검증 실패(손상된 백업): %s', dst)
+        if _kakao_connected():
+            try:
+                _kakao_send_to_all(
+                    f'⚠️ 설비QR 자동 백업 정합성 검증 실패\n파일: {os.path.basename(dst)}\n'
+                    f'백업 파일이 손상되었을 수 있습니다. 서버 디스크/DB 상태를 확인해주세요.',
+                    f'http://{get_local_ip()}:5001/'
+                )
+            except Exception:
+                logging.exception('백업 실패 알림 발송 중 오류')
 
     cutoff = datetime.now() - timedelta(days=AUTO_BACKUP_RETENTION_DAYS)
     for f in os.listdir(AUTO_BACKUP_DIR):
@@ -3673,7 +3836,6 @@ def _auto_backup_db():
                 os.remove(p)
             except Exception:
                 logging.exception('오래된 자동 백업 삭제 실패: %s', p)
-    logging.info('자동 DB 백업 완료: %s', dst)
 
 def _auto_backup_loop():
     while True:
@@ -3725,6 +3887,17 @@ def kakao_remove(kakao_id):
         return redirect(request.referrer or url_for('index'))
     _kakao_remove_account(kakao_id)
     flash('카카오톡 알림 대상에서 제거했습니다.', 'success')
+    return redirect(url_for('index'))
+
+
+@app.route('/kakao/notify_settings', methods=['POST'])
+def kakao_notify_settings():
+    if not session.get('edit_authorized'):
+        flash('설정 변경 권한이 없습니다. 비밀번호를 입력해 주세요.', 'danger')
+        return redirect(request.referrer or url_for('index'))
+    cfg = {key: (request.form.get(f'notify_{key}') == 'on') for key in NOTIFY_TYPES}
+    _save_notify_settings(cfg)
+    flash('알림 유형 설정을 저장했습니다.', 'success')
     return redirect(url_for('index'))
 
 
