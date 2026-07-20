@@ -1768,6 +1768,24 @@ def fault_edit(fault_id):
 
         save_edit_photos('fault_photos[]', 'fault_photo_labels[]', 'fault')
         save_edit_photos('action_photos[]', 'action_photo_labels[]', 'action')
+
+        # 사용부품 갱신 (제출된 목록으로 전체 교체)
+        db.execute("DELETE FROM used_parts WHERE fault_id=?", (fault_id,))
+        part_names = request.form.getlist('part_name[]')
+        part_qtys  = request.form.getlist('part_qty[]')
+        part_notes = request.form.getlist('part_note[]')
+        for pname, pqty, pnote in zip(part_names, part_qtys, part_notes):
+            pname = pname.strip()
+            if pname:
+                try:
+                    qty = int(pqty) if pqty else 1
+                except ValueError:
+                    qty = 1
+                db.execute(
+                    "INSERT INTO used_parts (fault_id,part_name,quantity,note) VALUES (?,?,?,?)",
+                    (fault_id, pname, qty, pnote.strip())
+                )
+
         db.commit()
         db.close()
         if grade != fault['grade']:
