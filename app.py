@@ -171,6 +171,11 @@ def _load_admin_password_hash():
 def check_admin_password(pw):
     return check_password_hash(_load_admin_password_hash(), pw or '')
 
+def _safe_next(value, default='/'):
+    if value and value.startswith('/') and not value.startswith('//') and not value.startswith('/\\'):
+        return value
+    return default
+
 def set_admin_password(new_password):
     h = generate_password_hash(new_password)
     with open(ADMIN_CONFIG_PATH, 'w', encoding='utf-8') as f:
@@ -1275,8 +1280,11 @@ def equipment_detail(eq_id):
 # ──────────────────────────────────────────────
 # QR 생성 / 출력
 # ──────────────────────────────────────────────
-@app.route('/qr/generate/<int:eq_id>')
+@app.route('/qr/generate/<int:eq_id>', methods=['POST'])
 def qr_generate(eq_id):
+    if not session.get('edit_authorized'):
+        flash('QR 재생성은 관리자 인증이 필요합니다. 비밀번호를 입력해 주세요.', 'danger')
+        return redirect(url_for('qr_print', eq_id=eq_id))
     db = get_db()
     eq = db.execute("SELECT * FROM equipment WHERE id=?", (eq_id,)).fetchone()
     db.close()
@@ -1580,7 +1588,7 @@ def fault_auth():
     actor_sel    = request.form.get('actor', '').strip()
     actor_custom = request.form.get('actor_custom', '').strip()
     actor        = actor_custom if actor_sel == '__new__' else actor_sel
-    next_url = request.form.get('next', '/')
+    next_url = _safe_next(request.form.get('next'))
     if check_admin_password(pw):
         _register_login_success(ip)
         if actor:
@@ -1621,7 +1629,7 @@ def worker_delete():
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    next_url = request.values.get('next') or url_for('index')
+    next_url = _safe_next(request.values.get('next'), url_for('index'))
     if request.method == 'POST':
         ip = request.remote_addr
         remaining = _login_lock_remaining(ip)
@@ -1661,7 +1669,7 @@ def change_admin_password():
     current_pw = request.form.get('current_password', '').strip()
     new_pw     = request.form.get('new_password', '').strip()
     new_pw2    = request.form.get('new_password_confirm', '').strip()
-    next_url   = request.form.get('next') or url_for('index')
+    next_url   = _safe_next(request.form.get('next'), url_for('index'))
 
     if not check_admin_password(current_pw):
         flash('현재 비밀번호가 올바르지 않습니다.', 'danger')

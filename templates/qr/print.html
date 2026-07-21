@@ -59,10 +59,19 @@
           <button onclick="window.print()" class="btn btn-dark">
             <i class="bi bi-printer"></i> 인쇄
           </button>
-          <a href="{{ url_for('qr_generate', eq_id=eq.id) }}"
-             class="btn btn-outline-secondary">
+          {% if session.get('edit_authorized') %}
+          <form method="post" action="{{ url_for('qr_generate', eq_id=eq.id) }}" class="d-grid">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-outline-secondary">
+              <i class="bi bi-arrow-clockwise"></i> QR 재생성
+            </button>
+          </form>
+          {% else %}
+          <button type="button" class="btn btn-outline-secondary"
+                  onclick="openDeleteAuth('{{ request.full_path }}')">
             <i class="bi bi-arrow-clockwise"></i> QR 재생성
-          </a>
+          </button>
+          {% endif %}
         </div>
       </div>
     </div>
