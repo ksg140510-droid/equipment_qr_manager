@@ -429,6 +429,9 @@ a.stat-card-link .stat-card { position: relative; }
   transition: border-color .2s, box-shadow .2s;
   background-color: #fff;
 }
+/* select는 텍스트 옆에 브라우저가 그리는 화살표 아이콘이 따로 있어서
+   오른쪽 여백을 더 줘야 글자와 화살표가 겹치지 않는다. */
+.form-select { padding-right: 2.25rem; }
 .form-control:focus, .form-select:focus {
   border-color: var(--mes-blue);
   box-shadow: 0 0 0 3px rgba(21,101,192,.14);
@@ -438,6 +441,9 @@ a.stat-card-link .stat-card { position: relative; }
   font-size: 0.88rem !important;
   padding: 0.45rem 0.8rem !important;
 }
+.form-select-sm { padding-right: 1.9rem !important; }
+#trendViewSelect { min-width: 88px; }
+#trendMonthSelect { min-width: 132px; }
 .form-label {
   font-size: 0.78rem;
   font-weight: 700;

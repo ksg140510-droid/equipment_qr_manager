@@ -1495,33 +1495,36 @@ def fault_list():
     date_to   = request.args.get('date_to', '').strip()
     eq_id     = request.args.get('eq_id', '').strip()
 
-    sql = "SELECT * FROM fault_history WHERE 1=1"
-    params = []
+    base_sql = "FROM fault_history WHERE 1=1"
+    base_params = []
 
     if q:
-        sql += " AND (eq_number LIKE ? OR eq_name LIKE ? OR symptom LIKE ? OR worker LIKE ?)"
-        params += [f'%{q}%'] * 4
+        base_sql += " AND (eq_number LIKE ? OR eq_name LIKE ? OR symptom LIKE ? OR worker LIKE ?)"
+        base_params += [f'%{q}%'] * 4
     if sym:
-        sql += " AND symptom LIKE ?"
-        params.append(f'%{sym}%')
+        base_sql += " AND symptom LIKE ?"
+        base_params.append(f'%{sym}%')
     if worker:
-        sql += " AND worker LIKE ?"
-        params.append(f'%{worker}%')
+        base_sql += " AND worker LIKE ?"
+        base_params.append(f'%{worker}%')
     if grade:
-        sql += " AND grade=?"
-        params.append(grade)
+        base_sql += " AND grade=?"
+        base_params.append(grade)
+    if date_from:
+        base_sql += " AND date(occurred_at) >= ?"
+        base_params.append(date_from)
+    if date_to:
+        base_sql += " AND date(occurred_at) <= ?"
+        base_params.append(date_to)
+    if eq_id:
+        base_sql += " AND equipment_id=?"
+        base_params.append(eq_id)
+
+    sql = "SELECT * " + base_sql
+    params = list(base_params)
     if status:
         sql += " AND (status=? OR (status IS NULL AND ?='미조치'))"
         params += [status, status]
-    if date_from:
-        sql += " AND date(occurred_at) >= ?"
-        params.append(date_from)
-    if date_to:
-        sql += " AND date(occurred_at) <= ?"
-        params.append(date_to)
-    if eq_id:
-        sql += " AND equipment_id=?"
-        params.append(eq_id)
 
     PAGE_SIZE = 20
     try:
@@ -1530,6 +1533,13 @@ def fault_list():
         page = 1
 
     db = get_db()
+    status_counts_rows = db.execute(
+        f"SELECT COALESCE(status, '미조치') as st, COUNT(*) c {base_sql} GROUP BY st", base_params
+    ).fetchall()
+    status_counts = {'전체': sum(r['c'] for r in status_counts_rows)}
+    for r in status_counts_rows:
+        status_counts[r['st']] = r['c']
+
     total_count = db.execute(f"SELECT COUNT(*) c FROM ({sql})", params).fetchone()['c']
     total_pages = max(1, (total_count + PAGE_SIZE - 1) // PAGE_SIZE)
     page = min(page, total_pages)
@@ -1553,7 +1563,73 @@ def fault_list():
                            q=q, sym=sym, worker=worker, grade=grade,
                            status=status, date_from=date_from, date_to=date_to,
                            page=page, total_pages=total_pages, total_count=total_count,
-                           page_url=page_url)
+                           page_url=page_url, status_counts=status_counts)
+
+
+def _format_elapsed_minutes(m):
+    if m is None:
+        return '-'
+    m = max(0, m)
+    if m < 60:
+        return f'{m}분'
+    if m < 1440:
+        return f'{m // 60}시간 {m % 60}분'
+    days = m // 1440
+    hours = (m % 1440) // 60
+    return f'{days}일 {hours}시간'
+
+
+def _get_open_faults(db):
+    """미조치/진행중 상태인 고장을 등급(A>B>C) 우선, 오래된 순으로 반환."""
+    rows = [dict(r) for r in db.execute("""
+        SELECT * FROM fault_history
+        WHERE (status IS NULL OR status IN ('미조치','진행중'))
+        ORDER BY CASE grade WHEN 'A' THEN 0 WHEN 'B' THEN 1 WHEN 'C' THEN 2 ELSE 3 END,
+                 occurred_at ASC
+    """).fetchall()]
+    now = datetime.now()
+    counts = {'total': 0, 'A': 0, 'B': 0, 'C': 0}
+    for f in rows:
+        f['status'] = f['status'] or '미조치'
+        occ = _parse_dt(f['occurred_at']) if f['occurred_at'] else None
+        raw_minutes = int((now - occ).total_seconds() // 60) if occ else None
+        f['elapsed_minutes'] = max(0, raw_minutes) if raw_minutes is not None else None
+        f['elapsed_display'] = _format_elapsed_minutes(raw_minutes)
+        counts['total'] += 1
+        if f['grade'] in ('A', 'B', 'C'):
+            counts[f['grade']] += 1
+    return rows, counts
+
+
+@app.route('/fault/board')
+def fault_board():
+    db = get_db()
+    open_faults, counts = _get_open_faults(db)
+    db.close()
+    return render_template('fault/board.html', open_faults=open_faults, counts=counts)
+
+
+@app.route('/fault/board/data.json')
+def fault_board_data():
+    db = get_db()
+    open_faults, counts = _get_open_faults(db)
+    db.close()
+    return jsonify(
+        updated_at=datetime.now().strftime('%H:%M:%S'),
+        counts=counts,
+        faults=[{
+            'id': f['id'],
+            'eq_number': f['eq_number'],
+            'eq_name': f['eq_name'],
+            'grade': f['grade'],
+            'symptom': f['symptom'],
+            'occurred_at': f['occurred_at'],
+            'worker': f['worker'],
+            'status': f['status'],
+            'elapsed_minutes': f['elapsed_minutes'],
+            'elapsed_display': f['elapsed_display'],
+        } for f in open_faults],
+    )
 
 
 @app.route('/fault/<int:fault_id>')
@@ -1860,6 +1936,35 @@ def fault_delete(fault_id):
 # ──────────────────────────────────────────────
 # 생산 LOT / 설비가동률
 # ──────────────────────────────────────────────
+def _fetch_lots_with_stats(db, limit=100, q='', status='', date_from='', date_to=''):
+    sql = "SELECT * FROM production_lots WHERE 1=1"
+    params = []
+    if q:
+        sql += " AND (model_name LIKE ? OR lot_number LIKE ?)"
+        params += [f'%{q}%', f'%{q}%']
+    if status:
+        sql += " AND status=?"
+        params.append(status)
+    if date_from:
+        sql += " AND date(started_at) >= ?"
+        params.append(date_from)
+    if date_to:
+        sql += " AND date(started_at) <= ?"
+        params.append(date_to)
+    sql += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+
+    lots = [dict(r) for r in db.execute(sql, params).fetchall()]
+    for lot in lots:
+        agg = db.execute("""
+            SELECT AVG(uptime_rate) as avg_rate, COUNT(*) as n
+            FROM production_lot_sections WHERE lot_id=? AND status='완료'
+        """, (lot['id'],)).fetchone()
+        lot['avg_uptime_rate'] = round(agg['avg_rate'], 1) if agg['avg_rate'] is not None else None
+        lot['completed_sections'] = agg['n']
+    return lots
+
+
 @app.route('/production', methods=['GET', 'POST'])
 def production_list():
     db = get_db()
@@ -1885,17 +1990,7 @@ def production_list():
         flash(f'LOT을 등록했습니다: {model_name} / {lot_number}. 각 섹션에서 가동을 시작해 주세요.', 'success')
         return redirect(url_for('production_detail', lot_id=cur.lastrowid))
 
-    lots = [dict(r) for r in db.execute(
-        "SELECT * FROM production_lots ORDER BY created_at DESC LIMIT 100"
-    ).fetchall()]
-    for lot in lots:
-        agg = db.execute("""
-            SELECT AVG(uptime_rate) as avg_rate, COUNT(*) as n
-            FROM production_lot_sections WHERE lot_id=? AND status='완료'
-        """, (lot['id'],)).fetchone()
-        lot['avg_uptime_rate'] = round(agg['avg_rate'], 1) if agg['avg_rate'] is not None else None
-        lot['completed_sections'] = agg['n']
-
+    lots = _fetch_lots_with_stats(db)
     recent_models = [r['model_name'] for r in db.execute("""
         SELECT model_name, MAX(created_at) as latest
         FROM production_lots GROUP BY model_name ORDER BY latest DESC LIMIT 50
@@ -2217,14 +2312,7 @@ def production_export():
     return xlsx_response(wb, '생산LOT_가동률')
 
 
-@app.route('/production/<int:lot_id>')
-def production_detail(lot_id):
-    db = get_db()
-    lot = db.execute("SELECT * FROM production_lots WHERE id=?", (lot_id,)).fetchone()
-    if not lot:
-        db.close()
-        abort(404)
-
+def _build_section_rows(db, lot_id):
     existing = {r['section']: dict(r) for r in db.execute(
         "SELECT * FROM production_lot_sections WHERE lot_id=? ORDER BY id", (lot_id,)
     ).fetchall()}
@@ -2245,8 +2333,82 @@ def production_detail(lot_id):
             section_rows.append(ls)
         else:
             section_rows.append({'section': section, 'status': '대기'})
+    return section_rows
+
+
+@app.route('/production/<int:lot_id>')
+def production_detail(lot_id):
+    db = get_db()
+    lot = db.execute("SELECT * FROM production_lots WHERE id=?", (lot_id,)).fetchone()
+    if not lot:
+        db.close()
+        abort(404)
+    section_rows = _build_section_rows(db, lot_id)
     db.close()
     return render_template('production/detail.html', lot=lot, section_rows=section_rows, pause_reasons=PAUSE_REASONS)
+
+
+@app.route('/production/board')
+def production_board_pick():
+    db = get_db()
+    active_lots = [dict(r) for r in db.execute(
+        "SELECT * FROM production_lots WHERE status='진행중' ORDER BY started_at DESC"
+    ).fetchall()]
+    db.close()
+    if len(active_lots) == 1:
+        return redirect(url_for('production_board', lot_id=active_lots[0]['id']))
+    return render_template('production/board_pick.html', active_lots=active_lots)
+
+
+@app.route('/production/board/list')
+def production_board_list():
+    q = request.args.get('q', '').strip()
+    status = request.args.get('status', '').strip()
+    date_from = request.args.get('date_from', '').strip()
+    date_to = request.args.get('date_to', '').strip()
+
+    db = get_db()
+    lots = _fetch_lots_with_stats(db, q=q, status=status, date_from=date_from, date_to=date_to)
+    db.close()
+    return render_template('production/board_list.html', lots=lots,
+                            q=q, status=status, date_from=date_from, date_to=date_to)
+
+
+@app.route('/production/<int:lot_id>/board')
+def production_board(lot_id):
+    db = get_db()
+    lot = db.execute("SELECT * FROM production_lots WHERE id=?", (lot_id,)).fetchone()
+    if not lot:
+        db.close()
+        abort(404)
+    section_rows = _build_section_rows(db, lot_id)
+    db.close()
+    return render_template('production/board.html', lot=lot, section_rows=section_rows)
+
+
+@app.route('/production/<int:lot_id>/board/data.json')
+def production_board_data(lot_id):
+    db = get_db()
+    lot = db.execute("SELECT * FROM production_lots WHERE id=?", (lot_id,)).fetchone()
+    if not lot:
+        db.close()
+        abort(404)
+    section_rows = _build_section_rows(db, lot_id)
+    rated = [s['uptime_rate'] for s in section_rows if s.get('uptime_rate') is not None]
+    overall_rate = round(sum(rated) / len(rated), 1) if rated else None
+    db.close()
+    return jsonify(
+        lot_status=lot['status'],
+        overall_rate=overall_rate,
+        updated_at=datetime.now().strftime('%H:%M:%S'),
+        sections=[{
+            'section': s['section'],
+            'status': s['status'],
+            'uptime_rate': s.get('uptime_rate'),
+            'started_at': s.get('started_at'),
+            'fault_count': s.get('fault_count'),
+        } for s in section_rows],
+    )
 
 
 @app.route('/production/<int:lot_id>/export')
@@ -3022,10 +3184,41 @@ def analysis_repeat():
         GROUP BY grade ORDER BY grade
     """).fetchall()
 
+    gantt_eq_ids = [row['equipment_id'] for row in eq_stat_rows[:8] if row['equipment_id'] is not None]
+    gantt_data = []
+    if gantt_eq_ids:
+        placeholders = ','.join('?' * len(gantt_eq_ids))
+        fault_rows = db.execute(f"""
+            SELECT equipment_id, occurred_at, completed_at, grade
+            FROM fault_history WHERE equipment_id IN ({placeholders})
+            ORDER BY occurred_at
+        """, gantt_eq_ids).fetchall()
+        by_eq = {}
+        for r in fault_rows:
+            by_eq.setdefault(r['equipment_id'], []).append(r)
+        now = datetime.now()
+        for row in eq_stat_rows[:8]:
+            bars = []
+            for f in by_eq.get(row['equipment_id'], []):
+                start = _parse_dt(f['occurred_at']) if f['occurred_at'] else None
+                if not start:
+                    continue
+                end = _parse_dt(f['completed_at']) if f['completed_at'] else now
+                if end <= start:
+                    end = start + timedelta(minutes=15)
+                bars.append({
+                    'start_ms': int(start.timestamp() * 1000),
+                    'end_ms': int(end.timestamp() * 1000),
+                    'grade': f['grade'] or 'D',
+                })
+            if bars:
+                gantt_data.append({'label': f"{row['eq_number']} {row['eq_name']}", 'bars': bars})
+
     db.close()
     return render_template('analysis/repeat.html',
                            eq_stat=eq_stat, sym_stat=sym_stat,
-                           parts_stat=parts_stat, grade_stat=grade_stat)
+                           parts_stat=parts_stat, grade_stat=grade_stat,
+                           gantt_data=gantt_data)
 
 
 @app.route('/analysis/repeat/export')
@@ -3089,16 +3282,57 @@ def analysis_repeat_export():
     return xlsx_response(wb, '반복고장분석')
 
 
+def _build_trend_insight(period_label, change_pct, a_ratio, avg_mtbf):
+    parts = []
+    if change_pct is not None:
+        if change_pct > 0:
+            parts.append(f'최근 {period_label} 고장 발생이 이전 대비 {change_pct}% 증가했습니다.')
+        elif change_pct < 0:
+            parts.append(f'최근 {period_label} 고장 발생이 이전 대비 {abs(change_pct)}% 감소했습니다.')
+        else:
+            parts.append(f'최근 {period_label} 고장 발생 건수가 이전과 동일합니다.')
+    if a_ratio is not None:
+        if a_ratio >= 30:
+            parts.append(f'A등급(생산정지) 비중이 {a_ratio}%로 높은 편이니 주의가 필요합니다.')
+        else:
+            parts.append(f'A등급(생산정지) 비중은 전체의 {a_ratio}%입니다.')
+    if avg_mtbf is not None:
+        parts.append(f'설비 평균 MTBF(평균고장간격)는 {avg_mtbf}일입니다.')
+    return ' '.join(parts) if parts else '분석할 데이터가 충분하지 않습니다.'
+
+
 @app.route('/analysis/trend')
 def analysis_trend():
     db = get_db()
     period = request.args.get('period', 'monthly')
     section = request.args.get('section', '')
     trend, trend_by_grade, eq_trend = _compute_trend_data(db, period, section)
+
+    total_count = sum(t['cnt'] for t in trend)
+    a_count = sum(trend_by_grade['A'])
+    a_ratio = round(a_count / total_count * 100, 1) if total_count else None
+
+    latest_count = trend[-1]['cnt'] if trend else 0
+    if len(trend) >= 2:
+        prev_count = trend[-2]['cnt']
+        change_pct = round((latest_count - prev_count) / prev_count * 100, 1) if prev_count else None
+    else:
+        change_pct = None
+
+    reliability = _compute_equipment_reliability(db)
+    mtbf_vals = [v['mtbf_days'] for v in reliability.values() if v['mtbf_days'] is not None]
+    mttr_vals = [v['mttr_minutes'] for v in reliability.values() if v['mttr_minutes'] is not None]
+    avg_mtbf = round(sum(mtbf_vals) / len(mtbf_vals), 1) if mtbf_vals else None
+    avg_mttr = round(sum(mttr_vals) / len(mttr_vals), 1) if mttr_vals else None
+
+    insight = _build_trend_insight('기간' if period == 'weekly' else '월', change_pct, a_ratio, avg_mtbf)
+
     db.close()
     return render_template('analysis/trend.html',
                            trend=trend, eq_trend=eq_trend, trend_by_grade=trend_by_grade,
-                           period=period, section=section, sections=SECTIONS)
+                           period=period, section=section, sections=SECTIONS,
+                           total_count=total_count, latest_count=latest_count, change_pct=change_pct,
+                           a_ratio=a_ratio, avg_mtbf=avg_mtbf, avg_mttr=avg_mttr, insight=insight)
 
 
 def _compute_trend_data(db, period, section):

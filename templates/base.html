@@ -67,8 +67,23 @@
           </a>
         </li>
         <li class="nav-item">
-          <a class="nav-link {% if 'production' in request.endpoint %}active{% endif %}" href="{{ url_for('production_list') }}">
+          <a class="nav-link {% if request.endpoint == 'fault_board' %}active{% endif %}" href="{{ url_for('fault_board') }}">
+            <i class="bi bi-grid-1x2-fill"></i> 고장현황판
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link {% if 'production' in request.endpoint and 'board' not in request.endpoint %}active{% endif %}" href="{{ url_for('production_list') }}">
             <i class="bi bi-boxes"></i> 생산LOT
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link {% if request.endpoint in ['production_board_pick','production_board'] %}active{% endif %}" href="{{ url_for('production_board_pick') }}">
+            <i class="bi bi-grid-1x2-fill"></i> 실시간 설비 가동률
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link {% if request.endpoint == 'production_board_list' %}active{% endif %}" href="{{ url_for('production_board_list') }}">
+            <i class="bi bi-search"></i> 현황판 조회
           </a>
         </li>
         <li class="nav-item dropdown">
@@ -129,10 +144,19 @@
     <a class="sidebar-link {% if request.endpoint in ['fault_list','fault_detail'] %}active{% endif %}" href="{{ url_for('fault_list') }}" title="고장 이력">
       <i class="bi bi-exclamation-triangle"></i><span>고장 이력</span>
     </a>
+    <a class="sidebar-link {% if request.endpoint == 'fault_board' %}active{% endif %}" href="{{ url_for('fault_board') }}" title="실시간 고장현황판">
+      <i class="bi bi-grid-1x2-fill"></i><span>실시간 고장현황판</span>
+    </a>
 
     <div class="sidebar-section">생산관리</div>
-    <a class="sidebar-link {% if 'production' in request.endpoint %}active{% endif %}" href="{{ url_for('production_list') }}" title="생산 LOT / 가동률">
+    <a class="sidebar-link {% if 'production' in request.endpoint and 'board' not in request.endpoint %}active{% endif %}" href="{{ url_for('production_list') }}" title="생산 LOT / 가동률">
       <i class="bi bi-boxes"></i><span>생산 LOT / 가동률</span>
+    </a>
+    <a class="sidebar-link {% if request.endpoint in ['production_board_pick','production_board'] %}active{% endif %}" href="{{ url_for('production_board_pick') }}" title="실시간 설비 가동률">
+      <i class="bi bi-grid-1x2-fill"></i><span>실시간 설비 가동률</span>
+    </a>
+    <a class="sidebar-link {% if request.endpoint == 'production_board_list' %}active{% endif %}" href="{{ url_for('production_board_list') }}" title="실시간 설비 가동률 조회">
+      <i class="bi bi-search"></i><span>실시간 설비 가동률 조회</span>
     </a>
 
     <div class="sidebar-section">분석</div>

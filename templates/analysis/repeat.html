@@ -78,6 +78,21 @@
     </div>
   </div>
 
+  <!-- 반복고장 타임라인 (간트차트) -->
+  {% if gantt_data %}
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-bar-chart-steps" style="color:var(--mes-danger)"></i>
+        설비별 고장 발생 타임라인 (상위 {{ gantt_data|length }}개 설비)
+      </div>
+      <div class="card-body" style="height:{{ gantt_data|length * 45 + 40 }}px">
+        <canvas id="ganttChart"></canvas>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   <!-- 증상별 + 부품별 -->
   <div class="col-12 col-md-6">
     <div class="card h-100">
@@ -179,4 +194,80 @@
   </div>
 
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const ganttData = {{ gantt_data | tojson }};
+const ganttCtx = document.getElementById('ganttChart');
+if (ganttCtx && ganttData.length) {
+  const gradeColors = { A: '#C62828', B: '#F9A825', C: '#2E7D32', D: '#90A4AE' };
+  const labels = ganttData.map(function(g) { return g.label; });
+  const datasets = ['A', 'B', 'C', 'D'].map(function(grade) {
+    const data = [];
+    ganttData.forEach(function(g, idx) {
+      g.bars.forEach(function(b) {
+        if (b.grade === grade) {
+          data.push({ x: b.start_ms, y: idx, start_ms: b.start_ms, end_ms: b.end_ms });
+        }
+      });
+    });
+    return {
+      label: grade + '등급',
+      data: data,
+      backgroundColor: gradeColors[grade],
+      pointRadius: 6,
+      pointHoverRadius: 8
+    };
+  }).filter(function(ds) { return ds.data.length > 0; });
+
+  new Chart(ganttCtx, {
+    type: 'scatter',
+    data: { datasets: datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: {
+          type: 'linear',
+          ticks: {
+            color: '#607D8B',
+            callback: function(v) {
+              const d = new Date(v);
+              return d.getFullYear() + '.' + (d.getMonth() + 1) + '.' + d.getDate();
+            }
+          },
+          grid: { color: '#f0f3f7' }
+        },
+        y: {
+          type: 'linear',
+          min: -0.5,
+          max: labels.length - 0.5,
+          reverse: true,
+          ticks: {
+            stepSize: 1,
+            color: '#607D8B',
+            callback: function(v) { return labels[v] || ''; }
+          },
+          grid: { color: '#f0f3f7' }
+        }
+      },
+      plugins: {
+        legend: { position: 'top', labels: { boxWidth: 12, font: { size: 11 } } },
+        tooltip: {
+          callbacks: {
+            title: function(items) { return labels[items[0].raw.y]; },
+            label: function(ctx) {
+              const raw = ctx.raw;
+              const s = new Date(raw.start_ms).toLocaleString('ko-KR');
+              const e = new Date(raw.end_ms).toLocaleString('ko-KR');
+              return ctx.dataset.label + ': ' + s + ' ~ ' + e;
+            }
+          }
+        }
+      }
+    }
+  });
+}
+</script>
 {% endblock %}

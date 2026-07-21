@@ -1,0 +1,122 @@
+{% extends 'base.html' %}
+{% from '_macros.html' import empty_row %}
+{% block title %}실시간 설비 가동률 조회{% endblock %}
+
+{% block content %}
+<div class="row mt-3 g-3">
+
+  <div class="col-12">
+    <div class="app-breadcrumb">
+      <a href="{{ url_for('index') }}">Home</a><span class="sep">/</span>
+      <a href="{{ url_for('production_list') }}">생산 LOT 관리</a><span class="sep">/</span>
+      <span class="current">실시간 설비 가동률 조회</span>
+    </div>
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">
+          <i class="bi bi-search" style="color:var(--mes-cyan)"></i>실시간 설비 가동률 조회
+        </h1>
+        <div class="page-subtitle">LOT을 선택하면 해당 LOT의 실시간 설비 가동률로 이동합니다 (진행중/완료 모두 조회 가능)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 검색 필터 패널 -->
+  <div class="col-12">
+    <div class="search-panel">
+      <form method="get" class="row g-2">
+        <div class="col-12 col-md-4">
+          <label class="form-label">통합 검색</label>
+          <div class="input-group">
+            <span class="input-group-text" style="background:#f4f7fb;border-color:var(--mes-border)">
+              <i class="bi bi-search text-muted"></i>
+            </span>
+            <input type="text" name="q" value="{{ q }}"
+                   class="form-control form-control-sm"
+                   placeholder="모델명 / LOT번호">
+          </div>
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label">상태</label>
+          <select name="status" class="form-select form-select-sm">
+            <option value="">전체</option>
+            <option value="진행중" {% if status == '진행중' %}selected{% endif %}>진행중</option>
+            <option value="완료" {% if status == '완료' %}selected{% endif %}>완료</option>
+          </select>
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label">시작일</label>
+          <input type="date" name="date_from" value="{{ date_from }}"
+                 class="form-control form-control-sm">
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label">종료일</label>
+          <input type="date" name="date_to" value="{{ date_to }}"
+                 class="form-control form-control-sm">
+        </div>
+        <div class="col-6 col-md-2 d-flex align-items-end gap-1">
+          <button class="btn btn-primary btn-sm flex-fill">
+            <i class="bi bi-funnel"></i> 조회
+          </button>
+          <a href="{{ url_for('production_board_list') }}"
+             class="btn btn-outline-secondary btn-sm flex-fill">
+            <i class="bi bi-x-lg"></i>
+          </a>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">LOT 목록</div>
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>모델명</th><th>LOT번호</th><th>등록시각</th><th>상태</th><th>평균 가동률</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for lot in lots %}
+            <tr>
+              <td class="fw-bold" style="white-space:nowrap">{{ lot.model_name }}</td>
+              <td style="white-space:nowrap">{{ lot.lot_number }}</td>
+              <td style="white-space:nowrap;font-size:0.85rem">{{ lot.started_at }}</td>
+              <td style="white-space:nowrap">
+                <span class="badge {% if lot.status == '진행중' %}bg-success{% else %}bg-secondary{% endif %}">
+                  {{ lot.status }}
+                </span>
+              </td>
+              <td style="white-space:nowrap">
+                {% if lot.avg_uptime_rate is not none %}
+                <span class="badge {% if lot.avg_uptime_rate >= 95 %}bg-success{% elif lot.avg_uptime_rate >= 85 %}bg-warning text-dark{% else %}bg-danger{% endif %}">
+                  {{ '%.1f'|format(lot.avg_uptime_rate) }}%
+                </span>
+                <span class="text-muted small">(완료 {{ lot.completed_sections }}개 섹션)</span>
+                {% else %}
+                <span class="text-muted small">완료된 섹션 없음</span>
+                {% endif %}
+              </td>
+              <td style="white-space:nowrap">
+                <a href="{{ url_for('production_board', lot_id=lot.id) }}" class="btn btn-sm btn-outline-primary">
+                  <i class="bi bi-grid-1x2-fill"></i> 현황판 보기
+                </a>
+              </td>
+            </tr>
+            {% endfor %}
+            {% if not lots %}
+            {% if q or status or date_from or date_to %}
+            {{ empty_row(6, '조회된 LOT이 없습니다.', icon='bi-search', hint='검색 조건을 바꿔서 다시 시도해 보세요.') }}
+            {% else %}
+            {{ empty_row(6, '등록된 LOT이 없습니다.', icon='bi-boxes', hint='생산 LOT 관리에서 새 LOT을 등록해 보세요.') }}
+            {% endif %}
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

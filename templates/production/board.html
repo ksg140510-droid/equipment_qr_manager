@@ -1,0 +1,216 @@
+{% extends 'base.html' %}
+{% block title %}{{ lot.model_name }} / {{ lot.lot_number }} - 실시간 설비 가동률{% endblock %}
+
+{% block content %}
+<div class="row mt-3 g-3">
+
+  <div class="col-12">
+    <div class="app-breadcrumb">
+      <a href="{{ url_for('index') }}">Home</a><span class="sep">/</span>
+      <a href="{{ url_for('production_list') }}">생산 LOT 관리</a><span class="sep">/</span>
+      <a href="{{ url_for('production_detail', lot_id=lot.id) }}">{{ lot.model_name }} / {{ lot.lot_number }}</a><span class="sep">/</span>
+      <span class="current">실시간 설비 가동률</span>
+    </div>
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">
+          <i class="bi bi-grid-1x2-fill" style="color:var(--mes-cyan)"></i>실시간 설비 가동률
+        </h1>
+        <div class="page-subtitle">{{ lot.model_name }} / {{ lot.lot_number }} — 섹션별 가동 상태</div>
+      </div>
+      <div class="d-flex gap-2 flex-wrap align-items-center">
+        <select id="autoRefreshSel" class="form-select form-select-sm" style="width:auto">
+          <option value="0">자동새로고침 끄기</option>
+          <option value="10">10초마다</option>
+          <option value="30" selected>30초마다</option>
+          <option value="60">60초마다</option>
+        </select>
+        <button type="button" id="refreshNowBtn" class="btn btn-outline-primary btn-sm">
+          <i class="bi bi-arrow-clockwise"></i> 즉시 새로고침
+        </button>
+        <a href="{{ url_for('production_detail', lot_id=lot.id) }}" class="btn btn-outline-secondary btn-sm">
+          <i class="bi bi-arrow-left"></i> LOT 상세
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- LOT 정보 + 실시간 시계 -->
+  <div class="col-12 col-lg-5">
+    <div class="board-info-box">
+      <div class="board-info-label">LOT NO.</div>
+      <div class="board-info-value">{{ lot.lot_number }}</div>
+      <div class="board-info-sub">Model: {{ lot.model_name }}</div>
+      <div class="board-info-rate">
+        평균 가동률: <span id="overallRate">-</span>%
+      </div>
+    </div>
+  </div>
+  <div class="col-12 col-lg-7">
+    <div class="board-clock-box">
+      <div id="liveClock" class="board-clock-time">--:--:--</div>
+      <div id="liveDate" class="board-clock-date">-</div>
+      <div class="board-clock-updated">업데이트: <span id="updatedAt">-</span></div>
+    </div>
+  </div>
+
+  <!-- 공정 흐름 다이어그램 -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header ch-navy"><i class="bi bi-diagram-3"></i> 공정 흐름</div>
+      <div class="card-body">
+        <div class="board-flow" id="boardFlow">
+          {% for s in section_rows %}
+          <div class="board-flow-node status-{{ s.status }}" data-section="{{ s.section }}">
+            {{ s.section }}
+          </div>
+          {% if not loop.last %}<div class="board-flow-arrow"></div>{% endif %}
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 섹션별 가동률 카드 -->
+  <div class="col-12">
+    <div class="row g-3" id="boardCards">
+      {% for s in section_rows %}
+      <div class="col-12 col-md-6 col-lg-4 col-xl-3" data-board-card="{{ s.section }}">
+        <div class="card h-100 board-card">
+          <div class="card-header d-flex align-items-center justify-content-between">
+            <span class="fw-bold">{{ s.section }}</span>
+            <span class="badge board-status-badge status-{{ s.status }}">{{ s.status }}</span>
+          </div>
+          <div class="card-body">
+            <div class="text-muted small mb-1">시작: <span class="board-started">{{ s.started_at or '-' }}</span></div>
+            <div class="d-flex align-items-baseline justify-content-between mb-2">
+              <span class="board-rate-value">
+                {% if s.uptime_rate is defined %}{{ '%.1f'|format(s.uptime_rate) }}{% else %}-{% endif %}<small>%</small>
+              </span>
+              <span class="text-muted small">고장 <span class="board-fault-count">{{ s.fault_count or 0 }}</span>건</span>
+            </div>
+            <div class="board-progress">
+              <div class="board-progress-bar" style="width:{{ s.uptime_rate if s.uptime_rate is defined else 0 }}%"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+</div>
+
+<style>
+.board-info-box, .board-clock-box {
+  background: var(--mes-navy);
+  color: #fff;
+  border-radius: var(--mes-radius);
+  padding: var(--sp-5);
+  height: 100%;
+  box-shadow: var(--mes-shadow);
+}
+.board-info-label { font-size: .75rem; letter-spacing: .05em; color: #9fb3c8; }
+.board-info-value { font-size: 1.9rem; font-weight: 800; line-height: 1.2; overflow-wrap: anywhere; }
+.board-info-sub { font-size: .85rem; color: #c3d1e0; margin-bottom: var(--sp-3); overflow-wrap: anywhere; }
+.board-info-rate { font-size: 1rem; font-weight: 700; color: var(--mes-cyan); }
+.board-clock-box { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+.board-clock-time { font-size: 2.6rem; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+.board-clock-date { font-size: .95rem; color: #c3d1e0; margin-top: 2px; }
+.board-clock-updated { font-size: .72rem; color: #9fb3c8; margin-top: var(--sp-2); }
+
+.board-flow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.board-flow-node {
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: .85rem;
+  border: 2px solid var(--mes-border);
+  background: #fff;
+  color: var(--mes-text);
+  white-space: nowrap;
+}
+.board-flow-arrow {
+  flex: 0 0 24px;
+  height: 0;
+  border-top: 2px dotted var(--mes-border);
+}
+.board-flow-node.status-진행중 { border-color: var(--mes-success); color: var(--mes-success); background: #e8f5e9; }
+.board-flow-node.status-일시정지 { border-color: var(--mes-warning); color: var(--mes-warning); background: #fff3e0; }
+.board-flow-node.status-완료 { border-color: var(--mes-blue); color: #fff; background: var(--mes-blue); }
+.board-flow-node.status-대기 { border-color: var(--mes-border); color: var(--mes-muted); background: #fff; }
+
+.board-status-badge.status-진행중 { background: var(--mes-success); }
+.board-status-badge.status-일시정지 { background: var(--mes-warning); color:#000; }
+.board-status-badge.status-완료 { background: var(--mes-blue); }
+.board-status-badge.status-대기 { background: #cfd8dc; color:#000; }
+
+.board-rate-value { font-size: 1.7rem; font-weight: 800; color: var(--mes-blue); }
+.board-rate-value small { font-size: 1rem; font-weight: 600; }
+.board-progress { height: 8px; border-radius: 4px; background: #eceff1; overflow: hidden; }
+.board-progress-bar { height: 100%; background: var(--mes-cyan); transition: width .4s ease; }
+
+@media (max-width: 576px) {
+  .board-info-box, .board-clock-box { padding: var(--sp-4); }
+  .board-info-value { font-size: 1.5rem; }
+  .board-clock-time { font-size: 1.9rem; }
+  .board-flow-node { padding: var(--sp-2) var(--sp-3); font-size: .78rem; }
+  #autoRefreshSel { width: 100% !important; }
+}
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function tickClock() {
+  const now = new Date();
+  document.getElementById('liveClock').textContent = now.toLocaleTimeString('ko-KR', { hour12: false });
+  document.getElementById('liveDate').textContent = now.toLocaleDateString('ko-KR', { year:'numeric', month:'2-digit', day:'2-digit', weekday:'short' });
+}
+tickClock();
+setInterval(tickClock, 1000);
+
+const boardDataUrl = "{{ url_for('production_board_data', lot_id=lot.id) }}";
+let refreshTimer = null;
+
+function applyBoardData(data) {
+  document.getElementById('overallRate').textContent = data.overall_rate === null ? '-' : data.overall_rate;
+  document.getElementById('updatedAt').textContent = data.updated_at;
+  data.sections.forEach(function(s) {
+    const node = document.querySelector('.board-flow-node[data-section="' + s.section + '"]');
+    if (node) {
+      node.className = 'board-flow-node status-' + s.status;
+    }
+    const card = document.querySelector('[data-board-card="' + s.section + '"]');
+    if (!card) return;
+    const badge = card.querySelector('.board-status-badge');
+    badge.textContent = s.status;
+    badge.className = 'badge board-status-badge status-' + s.status;
+    card.querySelector('.board-started').textContent = s.started_at || '-';
+    card.querySelector('.board-fault-count').textContent = s.fault_count || 0;
+    const rate = s.uptime_rate;
+    card.querySelector('.board-rate-value').innerHTML = (rate === null || rate === undefined ? '-' : rate.toFixed(1)) + '<small>%</small>';
+    card.querySelector('.board-progress-bar').style.width = (rate || 0) + '%';
+  });
+}
+
+function refreshBoard() {
+  fetch(boardDataUrl)
+    .then(function(r) { return r.json(); })
+    .then(applyBoardData)
+    .catch(function() {});
+}
+
+function setAutoRefresh(seconds) {
+  if (refreshTimer) clearInterval(refreshTimer);
+  if (seconds > 0) refreshTimer = setInterval(refreshBoard, seconds * 1000);
+}
+
+document.getElementById('refreshNowBtn').addEventListener('click', refreshBoard);
+document.getElementById('autoRefreshSel').addEventListener('change', function() {
+  setAutoRefresh(parseInt(this.value, 10));
+});
+setAutoRefresh(parseInt(document.getElementById('autoRefreshSel').value, 10));
+refreshBoard();
+</script>
+{% endblock %}

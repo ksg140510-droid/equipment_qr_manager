@@ -1,0 +1,55 @@
+{% extends 'base.html' %}
+{% block title %}실시간 설비 가동률{% endblock %}
+
+{% block content %}
+<div class="row mt-3 g-3">
+
+  <div class="col-12">
+    <div class="app-breadcrumb">
+      <a href="{{ url_for('index') }}">Home</a><span class="sep">/</span>
+      <a href="{{ url_for('production_list') }}">생산 LOT 관리</a><span class="sep">/</span>
+      <span class="current">실시간 설비 가동률</span>
+    </div>
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">
+          <i class="bi bi-grid-1x2-fill" style="color:var(--mes-cyan)"></i>실시간 설비 가동률
+        </h1>
+        <div class="page-subtitle">진행중인 LOT을 선택하세요</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12">
+    {% if not active_lots %}
+    <div class="card">
+      <div class="card-body text-center text-muted py-5">
+        <i class="bi bi-inbox" style="font-size:2rem"></i>
+        <p class="mt-2 mb-3">현재 진행중인 LOT이 없습니다.</p>
+        <a href="{{ url_for('production_list') }}" class="btn btn-outline-primary btn-sm">생산 LOT 관리로 이동</a>
+      </div>
+    </div>
+    {% else %}
+    <div class="row g-3">
+      {% for lot in active_lots %}
+      <div class="col-12 col-md-6 col-lg-4">
+        <a href="{{ url_for('production_board', lot_id=lot.id) }}" class="text-decoration-none">
+          <div class="card h-100 board-pick-card">
+            <div class="card-body">
+              <div class="fw-bold" style="font-size:1.1rem;color:var(--mes-text)">{{ lot.model_name }} / {{ lot.lot_number }}</div>
+              <div class="text-muted small mt-1"><i class="bi bi-play-circle-fill text-success"></i> 시작: {{ lot.started_at }}</div>
+            </div>
+          </div>
+        </a>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+<style>
+.board-pick-card { transition: box-shadow .15s ease, transform .15s ease; }
+.board-pick-card:hover { box-shadow: 0 6px 18px rgba(13,33,55,.15); transform: translateY(-2px); }
+</style>
+{% endblock %}

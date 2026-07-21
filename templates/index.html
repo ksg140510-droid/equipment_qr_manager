@@ -100,24 +100,26 @@
         <a href="{{ url_for('fault_list') }}" class="small text-decoration-none">전체보기</a>
       </div>
       <div class="card-body p-0">
-        <table class="table table-hover mb-0">
-          <tbody>
-            {% for f in recent_faults %}
-            <tr onclick="location.href='{{ url_for('fault_detail', fault_id=f.id) }}'" style="cursor:pointer">
-              <td class="text-muted small" style="white-space:nowrap">{{ f.occurred_at[5:16] if f.occurred_at else '-' }}</td>
-              <td class="fw-bold small">{{ f.eq_number }}</td>
-              <td class="small text-truncate" style="max-width:160px">{{ f.symptom or '-' }}</td>
-              <td class="text-end">
-                <span class="badge {% if f.status == '완료' %}bg-success{% elif f.status == '진행중' %}bg-warning text-dark{% else %}bg-secondary{% endif %}" style="font-size:.68rem">
-                  {{ f.status or '미조치' }}
-                </span>
-              </td>
-            </tr>
-            {% else %}
-            {{ empty_row(4, '등록된 고장이 없습니다.') }}
-            {% endfor %}
-          </tbody>
-        </table>
+        <div class="table-responsive">
+          <table class="table table-hover mb-0">
+            <tbody>
+              {% for f in recent_faults %}
+              <tr onclick="location.href='{{ url_for('fault_detail', fault_id=f.id) }}'" style="cursor:pointer">
+                <td class="text-muted small" style="white-space:nowrap">{{ f.occurred_at[5:16] if f.occurred_at else '-' }}</td>
+                <td class="fw-bold small" style="white-space:nowrap">{{ f.eq_number }}</td>
+                <td class="small text-truncate" style="max-width:160px">{{ f.symptom or '-' }}</td>
+                <td class="text-end" style="white-space:nowrap">
+                  <span class="badge {% if f.status == '완료' %}bg-success{% elif f.status == '진행중' %}bg-warning text-dark{% else %}bg-secondary{% endif %}" style="font-size:.68rem">
+                    {{ f.status or '미조치' }}
+                  </span>
+                </td>
+              </tr>
+              {% else %}
+              {{ empty_row(4, '등록된 고장이 없습니다.') }}
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>
@@ -128,19 +130,21 @@
         <a href="{{ url_for('production_list') }}" class="small text-decoration-none">전체보기</a>
       </div>
       <div class="card-body p-0">
-        <table class="table table-hover mb-0">
-          <tbody>
-            {% for p in recent_production %}
-            <tr onclick="location.href='{{ url_for('production_detail', lot_id=p.target_id) }}'" style="cursor:pointer">
-              <td class="text-muted small" style="white-space:nowrap">{{ p.created_at[5:16] if p.created_at else '-' }}</td>
-              <td class="small">{{ p.action }}</td>
-              <td class="small text-truncate" style="max-width:180px">{{ p.detail or '-' }}</td>
-            </tr>
-            {% else %}
-            {{ empty_row(3, '최근 생산 활동이 없습니다.') }}
-            {% endfor %}
-          </tbody>
-        </table>
+        <div class="table-responsive">
+          <table class="table table-hover mb-0">
+            <tbody>
+              {% for p in recent_production %}
+              <tr onclick="location.href='{{ url_for('production_detail', lot_id=p.target_id) }}'" style="cursor:pointer">
+                <td class="text-muted small" style="white-space:nowrap">{{ p.created_at[5:16] if p.created_at else '-' }}</td>
+                <td class="small" style="white-space:nowrap">{{ p.action }}</td>
+                <td class="small text-truncate" style="max-width:180px">{{ p.detail or '-' }}</td>
+              </tr>
+              {% else %}
+              {{ empty_row(3, '최근 생산 활동이 없습니다.') }}
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>

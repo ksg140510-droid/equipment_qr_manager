@@ -31,23 +31,23 @@
     <div class="d-flex gap-2 flex-wrap">
       <a href="{{ url_for('fault_list') }}{% if q or sym or grade or date_from or date_to %}?q={{ q }}&symptom={{ sym }}&grade={{ grade }}&date_from={{ date_from }}&date_to={{ date_to }}{% endif %}"
          class="btn btn-sm {% if not status %}btn-secondary{% else %}btn-outline-secondary{% endif %}">
-        <i class="bi bi-list-ul"></i> 전체
+        <i class="bi bi-list-ul"></i> 전체 <span class="badge bg-light text-dark ms-1">{{ status_counts.get('전체', 0) }}</span>
       </a>
       <a href="{{ url_for('fault_list') }}?status=미조치{% if q %}&q={{ q }}{% endif %}{% if grade %}&grade={{ grade }}{% endif %}{% if date_from %}&date_from={{ date_from }}{% endif %}{% if date_to %}&date_to={{ date_to }}{% endif %}"
          class="btn btn-sm {% if status == '미조치' %}btn-danger{% else %}btn-outline-danger{% endif %}">
-        <i class="bi bi-exclamation-circle"></i> 미조치
+        <i class="bi bi-exclamation-circle"></i> 미조치 <span class="badge bg-light text-dark ms-1">{{ status_counts.get('미조치', 0) }}</span>
       </a>
       <a href="{{ url_for('fault_list') }}?status=진행중{% if q %}&q={{ q }}{% endif %}{% if grade %}&grade={{ grade }}{% endif %}{% if date_from %}&date_from={{ date_from }}{% endif %}{% if date_to %}&date_to={{ date_to }}{% endif %}"
          class="btn btn-sm {% if status == '진행중' %}btn-warning{% else %}btn-outline-warning{% endif %}" style="color:{% if status != '진행중' %}#E65100{% endif %}">
-        <i class="bi bi-hourglass-split"></i> 진행중
+        <i class="bi bi-hourglass-split"></i> 진행중 <span class="badge bg-light text-dark ms-1">{{ status_counts.get('진행중', 0) }}</span>
       </a>
       <a href="{{ url_for('fault_list') }}?status=대기{% if q %}&q={{ q }}{% endif %}{% if grade %}&grade={{ grade }}{% endif %}{% if date_from %}&date_from={{ date_from }}{% endif %}{% if date_to %}&date_to={{ date_to }}{% endif %}"
          class="btn btn-sm {% if status == '대기' %}btn-info{% else %}btn-outline-info{% endif %}">
-        <i class="bi bi-pause-circle"></i> 대기
+        <i class="bi bi-pause-circle"></i> 대기 <span class="badge bg-light text-dark ms-1">{{ status_counts.get('대기', 0) }}</span>
       </a>
       <a href="{{ url_for('fault_list') }}?status=완료{% if q %}&q={{ q }}{% endif %}{% if grade %}&grade={{ grade }}{% endif %}{% if date_from %}&date_from={{ date_from }}{% endif %}{% if date_to %}&date_to={{ date_to }}{% endif %}"
          class="btn btn-sm {% if status == '완료' %}btn-success{% else %}btn-outline-success{% endif %}">
-        <i class="bi bi-check-circle"></i> 완료
+        <i class="bi bi-check-circle"></i> 완료 <span class="badge bg-light text-dark ms-1">{{ status_counts.get('완료', 0) }}</span>
       </a>
       <span class="ms-auto text-muted small align-self-center">
         <strong>{{ faults|length }}</strong>건 조회됨

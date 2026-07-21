@@ -25,6 +25,9 @@
         </div>
       </div>
       <div class="d-flex gap-2 flex-wrap">
+        <a href="{{ url_for('production_board', lot_id=lot.id) }}" class="btn btn-outline-primary">
+          <i class="bi bi-grid-1x2-fill"></i> 실시간 설비 가동률
+        </a>
         <a href="{{ url_for('production_lot_export', lot_id=lot.id) }}" class="btn btn-outline-success">
           <i class="bi bi-file-earmark-excel"></i> 이 LOT 엑셀 내보내기
         </a>

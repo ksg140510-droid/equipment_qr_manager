@@ -1,0 +1,197 @@
+{% extends 'base.html' %}
+{% block title %}실시간 고장현황판{% endblock %}
+
+{% block content %}
+<div class="row mt-3 g-3">
+
+  <div class="col-12">
+    <div class="app-breadcrumb">
+      <a href="{{ url_for('index') }}">Home</a><span class="sep">/</span>
+      <a href="{{ url_for('fault_list') }}">고장 이력</a><span class="sep">/</span>
+      <span class="current">실시간 고장현황판</span>
+    </div>
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">
+          <i class="bi bi-grid-1x2-fill" style="color:var(--mes-cyan)"></i>실시간 고장현황판
+        </h1>
+        <div class="page-subtitle">현재 미조치/진행중인 고장을 한눈에 확인합니다</div>
+      </div>
+      <div class="d-flex gap-2 flex-wrap align-items-center">
+        <select id="autoRefreshSel" class="form-select form-select-sm" style="width:auto">
+          <option value="0">자동새로고침 끄기</option>
+          <option value="10">10초마다</option>
+          <option value="30" selected>30초마다</option>
+          <option value="60">60초마다</option>
+        </select>
+        <button type="button" id="refreshNowBtn" class="btn btn-outline-primary btn-sm">
+          <i class="bi bi-arrow-clockwise"></i> 즉시 새로고침
+        </button>
+        <a href="{{ url_for('fault_list') }}" class="btn btn-outline-secondary btn-sm">
+          <i class="bi bi-list-ul"></i> 전체 고장이력
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 요약 통계 -->
+  <div class="col-6 col-lg-3">
+    <div class="board-stat-box">
+      <div class="board-stat-label">미조치/진행중 총합</div>
+      <div class="board-stat-value" id="statTotal">{{ counts.total }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="board-stat-box grade-a">
+      <div class="board-stat-label">A등급 (생산정지)</div>
+      <div class="board-stat-value" id="statA">{{ counts.A }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="board-stat-box grade-b">
+      <div class="board-stat-label">B등급 (품질영향)</div>
+      <div class="board-stat-value" id="statB">{{ counts.B }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="board-stat-box grade-c">
+      <div class="board-stat-label">C등급 (경미고장)</div>
+      <div class="board-stat-value" id="statC">{{ counts.C }}</div>
+    </div>
+  </div>
+
+  <!-- 미조치 고장 카드 -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header ch-navy d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-exclamation-triangle"></i> 미조치 / 진행중 고장 목록</span>
+        <span class="small" style="opacity:.8">업데이트: <span id="updatedAt">-</span></span>
+      </div>
+      <div class="card-body">
+        <div class="row g-3" id="faultCards">
+          {% for f in open_faults %}
+          <div class="col-12 col-md-6 col-lg-4" data-fault-card="{{ f.id }}">
+            <a href="{{ url_for('fault_detail', fault_id=f.id) }}" class="text-decoration-none">
+              <div class="card h-100 fault-board-card grade-{{ (f.grade or 'd')|lower }}">
+                <div class="card-body">
+                  <div class="d-flex justify-content-between align-items-start mb-1">
+                    <span class="fw-bold" style="color:var(--mes-text)">{{ f.eq_number }} {{ f.eq_name }}</span>
+                    <span class="badge bg-grade-{{ (f.grade or 'd')|lower }}">{{ f.grade or '-' }}등급</span>
+                  </div>
+                  <div class="text-muted small mb-2 fault-symptom">{{ f.symptom or '-' }}</div>
+                  <div class="d-flex justify-content-between align-items-center">
+                    <span class="badge bg-light text-dark border">{{ f.status }}</span>
+                    <span class="small fw-bold fault-elapsed" data-minutes="{{ f.elapsed_minutes if f.elapsed_minutes is not none else '' }}">
+                      {% if f.elapsed_minutes is not none %}경과 {{ f.elapsed_display }}{% else %}-{% endif %}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </a>
+          </div>
+          {% endfor %}
+        </div>
+        {% if not open_faults %}
+        <div class="text-center text-muted py-5">
+          <i class="bi bi-check-circle" style="font-size:2rem;color:var(--mes-success)"></i>
+          <p class="mt-2 mb-0">현재 미조치/진행중인 고장이 없습니다.</p>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<style>
+.board-stat-box {
+  background: #fff;
+  border-radius: var(--mes-radius);
+  padding: var(--sp-4) var(--sp-5);
+  box-shadow: var(--mes-shadow);
+  border-left: 5px solid var(--mes-muted);
+  height: 100%;
+}
+.board-stat-box.grade-a { border-left-color: var(--mes-danger); }
+.board-stat-box.grade-b { border-left-color: var(--mes-warning); }
+.board-stat-box.grade-c { border-left-color: var(--mes-success); }
+.board-stat-label { font-size: .78rem; color: var(--mes-muted); font-weight: 700; }
+.board-stat-value { font-size: 1.9rem; font-weight: 800; color: var(--mes-text); }
+
+.fault-board-card { border-width: 2px; transition: box-shadow .15s ease, transform .15s ease; }
+.fault-board-card:hover { box-shadow: 0 6px 18px rgba(13,33,55,.15); transform: translateY(-2px); }
+.fault-board-card.grade-a { border-color: var(--mes-danger); }
+.fault-board-card.grade-b { border-color: var(--mes-warning); }
+.fault-board-card.grade-c { border-color: var(--mes-success); }
+.fault-board-card.grade-d { border-color: var(--mes-border); }
+
+@media (max-width: 576px) {
+  .board-stat-box { padding: var(--sp-3) var(--sp-4); }
+  .board-stat-value { font-size: 1.5rem; }
+  #autoRefreshSel { width: 100% !important; }
+}
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const faultBoardDataUrl = "{{ url_for('fault_board_data') }}";
+let faultRefreshTimer = null;
+
+function gradeClass(grade) {
+  return (grade || 'd').toLowerCase();
+}
+
+function renderFaultCards(faults) {
+  const container = document.getElementById('faultCards');
+  if (!faults.length) {
+    container.innerHTML = '';
+    return;
+  }
+  container.innerHTML = faults.map(function(f) {
+    const g = gradeClass(f.grade);
+    const elapsed = (f.elapsed_minutes === null || f.elapsed_minutes === undefined) ? '-' : '경과 ' + f.elapsed_display;
+    return '<div class="col-12 col-md-6 col-lg-4" data-fault-card="' + f.id + '">' +
+      '<a href="/fault/' + f.id + '" class="text-decoration-none">' +
+      '<div class="card h-100 fault-board-card grade-' + g + '">' +
+      '<div class="card-body">' +
+      '<div class="d-flex justify-content-between align-items-start mb-1">' +
+      '<span class="fw-bold" style="color:var(--mes-text)">' + f.eq_number + ' ' + f.eq_name + '</span>' +
+      '<span class="badge bg-grade-' + g + '">' + (f.grade || '-') + '등급</span>' +
+      '</div>' +
+      '<div class="text-muted small mb-2 fault-symptom">' + (f.symptom || '-') + '</div>' +
+      '<div class="d-flex justify-content-between align-items-center">' +
+      '<span class="badge bg-light text-dark border">' + f.status + '</span>' +
+      '<span class="small fw-bold fault-elapsed">' + elapsed + '</span>' +
+      '</div></div></div></a></div>';
+  }).join('');
+}
+
+function applyFaultBoardData(data) {
+  document.getElementById('updatedAt').textContent = data.updated_at;
+  document.getElementById('statTotal').textContent = data.counts.total;
+  document.getElementById('statA').textContent = data.counts.A;
+  document.getElementById('statB').textContent = data.counts.B;
+  document.getElementById('statC').textContent = data.counts.C;
+  renderFaultCards(data.faults);
+}
+
+function refreshFaultBoard() {
+  fetch(faultBoardDataUrl)
+    .then(function(r) { return r.json(); })
+    .then(applyFaultBoardData)
+    .catch(function() {});
+}
+
+function setFaultAutoRefresh(seconds) {
+  if (faultRefreshTimer) clearInterval(faultRefreshTimer);
+  if (seconds > 0) faultRefreshTimer = setInterval(refreshFaultBoard, seconds * 1000);
+}
+
+document.getElementById('refreshNowBtn').addEventListener('click', refreshFaultBoard);
+document.getElementById('autoRefreshSel').addEventListener('change', function() {
+  setFaultAutoRefresh(parseInt(this.value, 10));
+});
+setFaultAutoRefresh(parseInt(document.getElementById('autoRefreshSel').value, 10));
+</script>
+{% endblock %}

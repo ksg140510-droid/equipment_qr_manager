@@ -56,6 +56,56 @@
     </div>
   </div>
 
+  <!-- KPI 요약 카드 -->
+  <div class="col-6 col-lg-3">
+    <div class="kpi-card">
+      <div class="kpi-label">최근 {{ '주' if period == 'weekly' else '월' }} 발생건수</div>
+      <div class="kpi-value">{{ latest_count }}<small>건</small></div>
+      {% if change_pct is not none %}
+      <div class="kpi-trend {% if change_pct > 0 %}up{% elif change_pct < 0 %}down{% endif %}">
+        {% if change_pct > 0 %}<i class="bi bi-arrow-up-short"></i>{% elif change_pct < 0 %}<i class="bi bi-arrow-down-short"></i>{% endif %}
+        {{ change_pct|abs }}%
+      </div>
+      {% else %}
+      <div class="kpi-trend text-muted">비교 데이터 없음</div>
+      {% endif %}
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="kpi-card">
+      <div class="kpi-label">A등급 비율</div>
+      <div class="kpi-ring-wrap">
+        <canvas id="aRatioRing" width="88" height="88"></canvas>
+        <div class="kpi-ring-center">{{ a_ratio if a_ratio is not none else '-' }}%</div>
+      </div>
+      <div class="kpi-status {% if a_ratio is none %}text-muted{% elif a_ratio >= 30 %}status-bad{% elif a_ratio >= 10 %}status-warn{% else %}status-good{% endif %}">
+        {% if a_ratio is none %}데이터 없음{% elif a_ratio >= 30 %}주의{% elif a_ratio >= 10 %}관찰{% else %}양호{% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="kpi-card">
+      <div class="kpi-label">평균 MTBF</div>
+      <div class="kpi-value">{{ avg_mtbf if avg_mtbf is not none else '-' }}<small>일</small></div>
+      <div class="text-muted small mt-1">클수록 안정적</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="kpi-card">
+      <div class="kpi-label">평균 MTTR</div>
+      <div class="kpi-value">{{ avg_mttr if avg_mttr is not none else '-' }}<small>분</small></div>
+      <div class="text-muted small mt-1">작을수록 빠른 조치</div>
+    </div>
+  </div>
+
+  <!-- 인사이트 -->
+  <div class="col-12">
+    <div class="insight-panel">
+      <i class="bi bi-lightbulb-fill"></i>
+      <span>{{ insight }}</span>
+    </div>
+  </div>
+
   <!-- 추이 차트 -->
   <div class="col-12">
     <div class="card">
@@ -63,8 +113,8 @@
         <i class="bi bi-bar-chart-line" style="color:var(--mes-success)"></i>
         {{ '월별' if period == 'monthly' else '주별' }} 고장 발생 추이
       </div>
-      <div class="card-body">
-        <canvas id="trendChart" height="150"></canvas>
+      <div class="card-body" style="height:280px">
+        <canvas id="trendChart"></canvas>
       </div>
     </div>
   </div>
@@ -75,8 +125,8 @@
       <div class="card-header">
         <i class="bi bi-cpu" style="color:var(--mes-blue)"></i>설비별 고장 건수 TOP10
       </div>
-      <div class="card-body">
-        <canvas id="eqChart" height="250"></canvas>
+      <div class="card-body" style="height:280px">
+        <canvas id="eqChart"></canvas>
       </div>
     </div>
   </div>
@@ -111,10 +161,71 @@
   </div>
 
 </div>
+<style>
+.kpi-card {
+  background: #fff;
+  border-radius: var(--mes-radius);
+  padding: var(--sp-4);
+  box-shadow: var(--mes-shadow);
+  height: 100%;
+  text-align: center;
+}
+.kpi-label { font-size: .78rem; color: var(--mes-muted); font-weight: 700; margin-bottom: var(--sp-2); }
+.kpi-value { font-size: 1.9rem; font-weight: 800; color: var(--mes-text); }
+.kpi-value small { font-size: 1rem; font-weight: 600; color: var(--mes-muted); margin-left: 2px; }
+.kpi-trend { font-size: .85rem; font-weight: 700; margin-top: var(--sp-1); }
+.kpi-trend.up { color: var(--mes-danger); }
+.kpi-trend.down { color: var(--mes-success); }
+.kpi-ring-wrap { position: relative; width: 88px; height: 88px; margin: 0 auto; }
+.kpi-ring-center {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 1.1rem; color: var(--mes-text);
+}
+.kpi-status { font-size: .8rem; font-weight: 700; margin-top: var(--sp-2); }
+.kpi-status.status-good { color: var(--mes-success); }
+.kpi-status.status-warn { color: var(--mes-warning); }
+.kpi-status.status-bad { color: var(--mes-danger); }
+.insight-panel {
+  background: #fff8e1;
+  border: 1px solid #ffe082;
+  border-radius: var(--mes-radius);
+  padding: var(--sp-3) var(--sp-4);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: .88rem;
+  color: #5d4400;
+}
+.insight-panel i { color: #f9a825; font-size: 1.1rem; }
+
+@media (max-width: 576px) {
+  .kpi-card { padding: var(--sp-3); }
+  .kpi-value { font-size: 1.5rem; }
+}
+</style>
 {% endblock %}
 
 {% block scripts %}
 <script>
+const aRatioCtx = document.getElementById('aRatioRing');
+if (aRatioCtx) {
+  const aRatio = {{ a_ratio if a_ratio is not none else 0 }};
+  const ringColor = aRatio >= 30 ? '#C62828' : (aRatio >= 10 ? '#E65100' : '#2E7D32');
+  new Chart(aRatioCtx, {
+    type: 'doughnut',
+    data: {
+      datasets: [{
+        data: [aRatio, Math.max(0, 100 - aRatio)],
+        backgroundColor: [ringColor, '#eceff1'],
+        borderWidth: 0
+      }]
+    },
+    options: {
+      cutout: '72%',
+      plugins: { legend: { display: false }, tooltip: { enabled: false } }
+    }
+  });
+}
 const trendCtx = document.getElementById('trendChart');
 if (trendCtx) {
   new Chart(trendCtx, {
@@ -130,6 +241,7 @@ if (trendCtx) {
     },
     options: {
       responsive: true,
+      maintainAspectRatio: false,
       plugins: { legend: { position: 'top', labels: { boxWidth: 12, font: { size: 11 } } } },
       scales: {
         y: { beginAtZero: true, stacked: true, ticks: { stepSize:1, color:'#607D8B' }, grid: { color:'#f0f3f7' } },
@@ -155,6 +267,7 @@ if (eqCtx) {
     },
     options: {
       responsive: true,
+      maintainAspectRatio: false,
       indexAxis: 'y',
       plugins: { legend: { display: false } },
       scales: {
